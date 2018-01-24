@@ -151,7 +151,7 @@ fieldinfo = {
  'stp'          :{ 'levels' : [0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0], 'cmap':readNCLcm('perc2_9lev'), 'fname':['SBCAPE','LCL_HEIGHT','SR_HELICITY_1KM','UBSHR6','VBSHR6'], 'arraylevel':[None,None,None,None,None], 'filename':'upp'},
   #'sigsvr       :{ 'levels' : [1e5,2e5,3e5,4e5,5e5,6e5,8e5,10e5], 'cmap':readNCLcm('prcp_1'), 'fname':['MLCAPE','UHSHR], 'filename':'upp'}
  'ptype'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1,1.5,2,2.5,3,3.5,4], 'cmap':['#dddddd','#aaaaaa']+readNCLcm('precip3_16lev')[1:], 'fname':['AFWA_RAIN_HRLY', 'AFWA_FZRA_HRLY', 'AFWA_ICE_HRLY', 'AFWA_SNOWFALL_HRLY'], 'filename':'wrfout'},
- 'ptype-prob'    :{ 'cmap':['green','blue','orange','red'], 'fname':['AFWA_RAIN_HRLY', 'AFWA_SNOWFALL_HRLY', 'AFWA_ICE_HRLY','AFWA_FZRA_HRLY'], 'filename':'wrfout'},
+ 'ptypes'        :{ 'cmap':['green','blue','orange','red'], 'fname':['AFWA_RAIN_HRLY', 'AFWA_SNOWFALL_HRLY', 'AFWA_ICE_HRLY','AFWA_FZRA_HRLY'], 'filename':'wrfout'},
  'winter'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1,1.5,2,2.5,3,3.5,4], 'cmap':['#dddddd','#aaaaaa']+readNCLcm('precip3_16lev')[1:], 'fname':['AFWA_RAIN_HRLY', 'AFWA_FZRA_HRLY', 'AFWA_ICE_HRLY', 'AFWA_SNOWFALL_HRLY'], 'filename':'wrfout'},
   'crefuh'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('cmap_rad.rgb')[0:13], 'fname': ['REFL_MAX_COL', 'MAX_UPDRAFT_HELICITY'], 'filename':'upp' },
 
@@ -169,7 +169,7 @@ fieldinfo = {
 }
 
 # Combine levels from RAIN, FZRA, ICE, and SNOW for plotting winter precip type. Ahijevych added this
-fieldinfo['ptype-prob']['levels'] = [fieldinfo['precip']['levels'][1:],fieldinfo['snow']['levels'],fieldinfo['ice']['levels'],fieldinfo['fzra']['levels']]
+fieldinfo['ptypes']['levels'] = [fieldinfo['precip']['levels'][1:],fieldinfo['snow']['levels'],fieldinfo['ice']['levels'],fieldinfo['fzra']['levels']]
 
 # domains = { 'domainname': { 'corners':[ll_lat,ll_lon,ur_lat,ur_lon], 'figsize':[w,h] } }
 domains = { 'CONUS' :{ 'corners': [23.1593,-120.811,46.8857,-65.0212], 'fig_width': 1080 },

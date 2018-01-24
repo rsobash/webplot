@@ -214,7 +214,7 @@ class webPlot:
 
     def plotFill(self):
         if self.opts['fill']['name'] == 'ptype': self.plotFill_ptype(); return
-        if self.opts['fill']['name'] == 'ptype-prob': self.plotFill_ptype_prob(); return
+        if self.opts['fill']['name'] == 'ptypes': self.plotFill_ptypes(); return
         elif self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
 
         if self.autolevels:
@@ -269,7 +269,7 @@ class webPlot:
         cb.set_ticklabels(['Rain', 'Freezing Rain', 'Sleet', 'Snow'])
         cb.ax.tick_params(length=0)
 
-    def plotFill_ptype_prob(self):
+    def plotFill_ptypes(self):
         types = self.data['fill']
         ntypes = len(types)
 
