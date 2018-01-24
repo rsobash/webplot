@@ -214,6 +214,7 @@ class webPlot:
 
     def plotFill(self):
         if self.opts['fill']['name'] == 'ptype': self.plotFill_ptype(); return
+        if self.opts['fill']['name'] == 'ptype-prob': self.plotFill_ptype_prob(); return
         elif self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
 
         if self.autolevels:
@@ -267,6 +268,44 @@ class webPlot:
         cb.set_ticks([0.5,1.5,2.5,3.5,4.5,5.5])
         cb.set_ticklabels(['Rain', 'Freezing Rain', 'Sleet', 'Snow'])
         cb.ax.tick_params(length=0)
+
+    def plotFill_ptype_prob(self):
+        types = self.data['fill']
+        ntypes = len(types)
+
+        # Plot where hourly precip of each type is greater than zero.
+        # Colors match the regular ptype plot, but are translucent, so you 
+        # can see them underneath each other.
+        # Data arrays, colors, and levels defined in fieldinfo.py
+        alpha = 0.25
+        colors = self.opts['fill']['colors']
+        threshes = self.opts['fill']['levels']
+        type_labels= self.opts['fill']['arrayname'] # Get label directly from fieldinfo arrayname.
+        type_labels = ['Rain', 'Snow', 'Sleet', 'Freezing Rain'] # Hard-coded
+        if any(len(lst) != ntypes for lst in [colors, threshes, type_labels]):
+            print "data, colors, threshes, and type_labels must all be same length"
+            sys.exit(1)
+        # make axes for colorbar, 175px to left and 35px down from bottom of map 
+        x0, y0 = self.ax.transAxes.transform((0,0))
+        x, y = self.fig.transFigure.inverted().transform((x0+175,y0-35))
+        # Width of space where colorbar will go. 
+        cbwidth = (0.985-x)/ntypes
+        for i in range(ntypes):
+            levels = self.opts['fill']['levels'][i]
+            # Mask pixels less than threshold 
+            type = np.ma.masked_less(types[i],levels[0])
+            cs = self.m.contourf(self.x, self.y, type, levels=[0,np.max(type)], colors=colors[i], ax=self.ax)
+            cax = self.fig.add_axes([x+(i*cbwidth),y,0.85*cbwidth,y/3.0])
+            cs.set_alpha(alpha)
+            cb = plt.colorbar(cs, cax=cax, orientation='horizontal', ticks=[])
+            cb.outline.set_visible(False)
+            cb.ax.set_title(type_labels[i])
+
+            data = ndimage.gaussian_filter(types[i], sigma=10)
+            cs2 = self.m.contour(self.x, self.y, data, colors=colors[i], levels=levels, linewidths=1.5, ax=self.ax)
+            cb = plt.colorbar(cs2, cax=cax, orientation='horizontal')
+            cb.ax.tick_params(labelsize=9,length=0)
+            cb.outline.set_edgecolor(colors[i])
 
     def plotReflectivityUH(self):
         levels = self.opts['fill']['levels']

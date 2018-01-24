@@ -95,6 +95,7 @@ fieldinfo = {
   'snow-24hr'    :{ 'levels' : [1,3,6,8,10,12,15,18,21,24,30,36], 'cmap':['#dddddd','#aaaaaa']+[readNCLcm('precip3_16lev')[i] for i in [1,3,5,8,10,12,14,16]]+['#FF99FF'], 'fname':['AFWA_SNOWFALL_HRLY'] }, # CSS  mod
   'snowacc'      :{ 'levels' : [0.01,0.1,0.5,1,2,3,4,5,6,8,10,12,18,24,36,48,60], 'cmap':['#dddddd','#aaaaaa']+[readNCLcm('precip3_16lev')[i] for i in [1,2,3,4,5,6,8,10,11,12,13,15,16]]+['#FF99FF'], 'fname':['AFWA_SNOWFALL'], 'filename':'diag'}, # CSS mod colortable
 # 'snowliq'      :{ 'levels' : [0.1,0.5,1,1.5,2,2.5,3,4,5,6], 'cmap':readNCLcm('precip3_16lev')[1:], 'fname':['AFWA_SNOW'], 'filename':'diag'},
+  'ice'          :{ 'levels' : [0.01,0.05,0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.75,1,1.25], 'cmap':[readNCLcm('precip3_16lev')[i] for i in [1,2,3,4,5,6,8,10,11,12,13,15,16]], 'fname':['AFWA_ICE_HRLY'], 'filename':'wrfout'},
   'iceacc'       :{ 'levels' : [0.01,0.05,0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.75,1,1.25], 'cmap':[readNCLcm('precip3_16lev')[i] for i in [1,2,3,4,5,6,8,10,11,12,13,15,16]], 'fname':['AFWA_ICE'], 'filename':'diag'},
   'fzra'         :{ 'levels' : [0.01,0.05,0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.75,1,1.25], 'cmap':[readNCLcm('precip3_16lev')[i] for i in [1,2,3,4,5,6,8,10,11,12,13,15,16]], 'fname':['AFWA_FZRA_HRLY'] }, # CSS added, hrly
   'fzraacc'      :{ 'levels' : [0.01,0.05,0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.75,1,1.25], 'cmap':[readNCLcm('precip3_16lev')[i] for i in [1,2,3,4,5,6,8,10,11,12,13,15,16]], 'fname':['AFWA_FZRA'], 'filename':'diag'},
@@ -150,6 +151,7 @@ fieldinfo = {
  'stp'          :{ 'levels' : [0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0], 'cmap':readNCLcm('perc2_9lev'), 'fname':['SBCAPE','LCL_HEIGHT','SR_HELICITY_1KM','UBSHR6','VBSHR6'], 'arraylevel':[None,None,None,None,None], 'filename':'upp'},
   #'sigsvr       :{ 'levels' : [1e5,2e5,3e5,4e5,5e5,6e5,8e5,10e5], 'cmap':readNCLcm('prcp_1'), 'fname':['MLCAPE','UHSHR], 'filename':'upp'}
  'ptype'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1,1.5,2,2.5,3,3.5,4], 'cmap':['#dddddd','#aaaaaa']+readNCLcm('precip3_16lev')[1:], 'fname':['AFWA_RAIN_HRLY', 'AFWA_FZRA_HRLY', 'AFWA_ICE_HRLY', 'AFWA_SNOWFALL_HRLY'], 'filename':'wrfout'},
+ 'ptype-prob'    :{ 'cmap':['green','blue','orange','red'], 'fname':['AFWA_RAIN_HRLY', 'AFWA_SNOWFALL_HRLY', 'AFWA_ICE_HRLY','AFWA_FZRA_HRLY'], 'filename':'wrfout'},
  'winter'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1,1.5,2,2.5,3,3.5,4], 'cmap':['#dddddd','#aaaaaa']+readNCLcm('precip3_16lev')[1:], 'fname':['AFWA_RAIN_HRLY', 'AFWA_FZRA_HRLY', 'AFWA_ICE_HRLY', 'AFWA_SNOWFALL_HRLY'], 'filename':'wrfout'},
   'crefuh'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('cmap_rad.rgb')[0:13], 'fname': ['REFL_MAX_COL', 'MAX_UPDRAFT_HELICITY'], 'filename':'upp' },
 
@@ -165,6 +167,9 @@ fieldinfo = {
   'shr01'        :{ 'fname'  : ['UBSHR1', 'VBSHR1'], 'filename': 'upp', 'skip':40 },
   'bunkers'      :{ 'fname'  : ['U_COMP_STM_6KM', 'V_COMP_STM_6KM'], 'filename': 'upp', 'skip':40 },
 }
+
+# Combine levels from RAIN, FZRA, ICE, and SNOW for plotting winter precip type. Ahijevych added this
+fieldinfo['ptype-prob']['levels'] = [fieldinfo['precip']['levels'][1:],fieldinfo['snow']['levels'],fieldinfo['ice']['levels'],fieldinfo['fzra']['levels']]
 
 # domains = { 'domainname': { 'corners':[ll_lat,ll_lon,ur_lat,ur_lon], 'figsize':[w,h] } }
 domains = { 'CONUS' :{ 'corners': [23.1593,-120.811,46.8857,-65.0212], 'fig_width': 1080 },
