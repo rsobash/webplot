@@ -214,7 +214,7 @@ class webPlot:
 
     def plotFill(self):
         if self.opts['fill']['name'] == 'ptype': self.plotFill_ptype(); return
-        if self.opts['fill']['name'] == 'ptypes': self.plotFill_ptypes(); return
+        if self.opts['fill']['name'][0:6] == 'ptypes': self.plotFill_ptypes(); return
         elif self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
 
         if self.autolevels:
@@ -284,6 +284,7 @@ class webPlot:
         type_labels = ['Rain', 'Snow', 'Sleet', 'Freezing Rain'] # Hard-coded
         if any(len(lst) != ntypes for lst in [colors, threshes, type_labels]):
             print "data, colors, threshes, and type_labels must all be same length"
+            print ntypes, colors, threshes, type_labels
             sys.exit(1)
         # make axes for colorbar, 175px to left and 35px down from bottom of map 
         x0, y0 = self.ax.transAxes.transform((0,0))
