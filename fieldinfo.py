@@ -68,7 +68,7 @@ fieldinfo = {
   'hmuh'         :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['UP_HELI_MAX'], 'filename':'diag'},
   'hmuh-neg'     :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['UP_HELI_MIN'], 'filename':'diag'},
   'hmuh03'       :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['UP_HELI_MAX03'], 'filename':'diag'},
-  'rvort1'       :{ 'levels' : [0.005,0.006,0.007,0.008,0.009,0.01,0.011,0.012,0.013,0.014,0.015], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['REL_VORT_MAX01'], 'filename':'diag'},
+  'rvort1'       :{ 'levels' : [0.005,0.006,0.007,0.008,0.009,0.01,0.011,0.012,0.013,0.014,0.015], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['RVORT1_MAX'], 'filename':'diag'},
   'hmup'         :{ 'levels' : [4,6,8,10,12,14,16,18,20,24,28,32,36,40,44,48], 'cmap': readNCLcm('prcp_1')[1:16], 'fname': ['W_UP_MAX'], 'filename':'diag' },
   #'hmdn'         :{ 'levels' : [-19,-17,-15,-13,-11,-9,-7,-5,-3,-1,0], 'cmap': readNCLcm('prcp_1')[16:1:-1]+['#ffffff'], 'fname': ['W_DN_MAX'], 'filename':'diag' },
   'hmdn'         :{ 'levels' : [2,3,4,6,8,10,12,14,16,18,20,22,24,26,28,30], 'cmap': readNCLcm('prcp_1')[1:16], 'fname': ['W_DN_MAX'], 'filename':'diag' },
@@ -183,42 +183,13 @@ fieldinfo = {
 #fieldinfo['ptypes']['levels'] = [fieldinfo['precip']['levels'][1:],fieldinfo['snow']['levels'],fieldinfo['ice']['levels'],fieldinfo['fzra']['levels']]
 
 # domains = { 'domainname': { 'corners':[ll_lat,ll_lon,ur_lat,ur_lon], 'figsize':[w,h] } }
-
-# These are based on the 2015-2017 NCAR ensemble
-#domains = { 'CONUS' :{ 'corners': [23.1593,-120.811,46.8857,-65.0212], 'fig_width': 1080 },
-#            'SGP' :{ 'corners': [25.3,-107.00,36.00,-88.70], 'fig_width':1080 },
-#            'NGP' :{ 'corners': [40.00,-105.0,50.30,-82.00], 'fig_width':1080 },
-#            'CGP' :{ 'corners': [33.00,-107.50,45.00,-86.60], 'fig_width':1080 },
-#            'SW'  :{ 'corners': [28.00,-121.50,44.39,-102.10], 'fig_width':1080 },
-#            'NW'  :{ 'corners': [37.00,-124.40,51.60,-102.10], 'fig_width':1080 },
-#            'SE'  :{ 'corners': [26.10,-92.75,36.00,-71.00], 'fig_width':1080 },
-#            'NE'  :{ 'corners': [38.00,-91.00,46.80,-65.30], 'fig_width':1080 },
-#            'MATL':{ 'corners': [33.50,-92.25,41.50,-68.50], 'fig_width':1080 },
-#}
-
-# These are based on the 2018 full CONUS-HRRRE 00z runs (same as NCAR ensemble above, except for CONUS, NE, SW, NW). Get CONUS from file
-#domains = { 'CONUS' :{ 'corners': [23.1593,-120.811,46.8857,-65.0212], 'fig_width': 1080 },
-#            'SGP' :{ 'corners': [25.3,-107.00,36.00,-88.70], 'fig_width':1080 },
-#            'NGP' :{ 'corners': [40.00,-105.0,50.30,-82.00], 'fig_width':1080 },
-#            'CGP' :{ 'corners': [33.00,-107.50,45.00,-86.60], 'fig_width':1080 },
-#            'SW'  :{ 'corners': [28.00,-121.00,44.39,-102.10], 'fig_width':1080 },
-#            'NW'  :{ 'corners': [37.00,-124.00,51.60,-102.10], 'fig_width':1080 },
-#            'SE'  :{ 'corners': [26.10,-92.75,36.00,-71.00], 'fig_width':1080 },
-#            'NE'  :{ 'corners': [38.00,-91.00,46.80,-65.50], 'fig_width':1080 },
-#            'MATL':{ 'corners': [33.50,-92.25,41.50,-68.50], 'fig_width':1080 },
-#            'CONUS':{'file': '/glade2/scratch2/wrfrt/realtime_ensemble/ensf_2018hwt/2018042100/wrf_rundir/ens_1/wrfinput_d02'} 
-#}
-
-# These are based on the 2018 55% CONUS-HRRRE 12z runs  (get CONUS from file)
 domains = { 'CONUS' :{ 'corners': [23.1593,-120.811,46.8857,-65.0212], 'fig_width': 1080 },
-            'SGP' :{ 'corners': [25.3,-107.60,36.00,-88.70], 'fig_width':1080 },
-            'NGP' :{ 'corners': [40.00,-108.0,49.80,-82.00], 'fig_width':1080 },
-            'CGP' :{ 'corners': [33.00,-108.50,45.00,-86.60], 'fig_width':1080 },
-            'SW'  :{ 'corners': [28.00,-121.00,44.39,-102.10], 'fig_width':1080 },
-            'NW'  :{ 'corners': [37.00,-124.00,51.60,-102.10], 'fig_width':1080 },
+            'SGP' :{ 'corners': [25.3,-107.00,36.00,-88.70], 'fig_width':1080 },
+            'NGP' :{ 'corners': [40.00,-105.0,50.30,-82.00], 'fig_width':1080 },
+            'CGP' :{ 'corners': [33.00,-107.50,45.00,-86.60], 'fig_width':1080 },
+            'SW'  :{ 'corners': [28.00,-121.50,44.39,-102.10], 'fig_width':1080 },
+            'NW'  :{ 'corners': [37.00,-124.40,51.60,-102.10], 'fig_width':1080 },
             'SE'  :{ 'corners': [26.10,-92.75,36.00,-71.00], 'fig_width':1080 },
-            'NE'  :{ 'corners': [38.00,-91.00,46.80,-65.70], 'fig_width':1080 },
+            'NE'  :{ 'corners': [38.00,-91.00,46.80,-65.30], 'fig_width':1080 },
             'MATL':{ 'corners': [33.50,-92.25,41.50,-68.50], 'fig_width':1080 },
-            'CONUS':{'file': '/glade2/scratch2/wrfrt/realtime_ensemble/ensf_2018hwt/2018042012/wrf_rundir/ens_1/wrfinput_d02'} 
 }
-
