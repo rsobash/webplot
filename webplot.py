@@ -2,11 +2,12 @@ import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import *
 from datetime import *
-import cPickle as pickle
+import pickle as pickle
 import os, sys, time, argparse
 import scipy.ndimage as ndimage
 from scipy import interpolate
 import subprocess
+import pdb
 from fieldinfo import *
 from netCDF4 import Dataset, MFDataset
 
@@ -19,8 +20,8 @@ class webPlot:
         self.debug = self.opts['debug']
         self.autolevels = self.opts['autolevels']
         self.domain = self.opts['domain']
-        if ',' in self.opts['timerange']: self.shr, self.ehr = map(int, self.opts['timerange'].split(','))
-	else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
+        if ',' in self.opts['timerange']: self.shr, self.ehr = list(map(int, self.opts['timerange'].split(',')))
+        else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
         self.createFilename()
         self.ENS_SIZE = int(os.getenv('ENS_SIZE', 10))
  
@@ -39,8 +40,8 @@ class webPlot:
            self.outfile = prefx+'_f'+'%03d'%self.shr+'-f'+'%03d'%self.ehr+'_'+self.domain+'.png' # 'test.png' # CSS
 
     def loadMap(self):
-        PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/u/home/wrfrt/rt_ensemble/python_scripts')   
-        self.fig, self.ax, self.m  = pickle.load(open('%s/rt2015_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
+        PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/work/ahijevyc/share/rt_ensemble/python_scripts')  
+        self.fig, self.ax, self.m  = pickle.load(open('%s/rt2015_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'rb'))
         lats, lons = readGrid(PYTHON_SCRIPTS_DIR)
         self.x, self.y = self.m(lons,lats)
 
@@ -68,8 +69,8 @@ class webPlot:
         with open('/glade/u/home/sobash/RT2015_gpx/hly-inventory.txt') as f:
             for line in f:
                 stn = line.split()
-                lonlat = map(float, stn[1:3][::-1])
-                x_ob, y_ob = self.m(*zip(lonlat))
+                lonlat = list(map(float, stn[1:3][::-1]))
+                x_ob, y_ob = self.m(*list(zip(lonlat)))
                 hly_forecast[stn[0]] = fi((y_ob,x_ob))[0]
                 hly_inventory[stn[0]] = (y_ob[0], x_ob[0], lonlat[0], lonlat[1])
 
@@ -111,7 +112,7 @@ class webPlot:
         cax.set_axis_bgcolor('#dddddd')
         cax.set_xticks([])
         cax.set_yticks([])
-        for i in cax.spines.itervalues(): i.set_linewidth(0.5)
+        for i in list(cax.spines.values()): i.set_linewidth(0.5)
 
         sizes, start_y, start_c, labels = [5,8,11,13,15], 0.84, 1, ['0-5F', '5-10F', '10-15F', '15-20F', '>= 20F']
         cax.text(0.2,0.94,'Below', va='center', ha='center', fontdict=fontdict, transform=cax.transAxes)
@@ -131,7 +132,7 @@ class webPlot:
         #latlons = zip(lons[10::40,10::40].flatten(), lats[10::40,10::40].flatten())
 
         f = interpolate.RegularGridInterpolator((self.y[:,0], self.x[0,:]), self.data['fill'][0], fill_value=-9999, bounds_error=False, method='linear')
-        x_ob, y_ob = self.m(*zip(*latlons))
+        x_ob, y_ob = self.m(*list(zip(*latlons)))
         fcst_val = f((y_ob,x_ob)) 
 
         fontdict = {'family':'monospace', 'size':9 }
@@ -142,12 +143,12 @@ class webPlot:
                 self.ax.text(x_ob[i], y_ob[i], int(round(fcst_val[i])), fontdict=fontdict, ha='center', va='center')
 
     def plotReports(self):
-       import csv, re, urllib2
+       import csv, re, urllib.request, urllib.error, urllib.parse
 
        url = 'http://www.spc.noaa.gov/climo/reports/%s_rpts_raw.csv'%(self.initdate.strftime('%y%m%d'))
        #url = 'http://www.spc.noaa.gov/climo/reports/yesterday.csv'
-       print url
-       response = urllib2.urlopen(url)
+       print(url)
+       response = urllib.request.urlopen(url)
        cr = csv.reader(response)
  
        lats, lons, type = [], [], []
@@ -238,7 +239,6 @@ class webPlot:
         # smooth some of the fill fields
         if self.opts['fill']['name'] == 'avo500': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=4)
         if self.opts['fill']['name'] == 'pbmin': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=2)
-
         cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
 
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac)
@@ -283,8 +283,8 @@ class webPlot:
         type_labels= self.opts['fill']['arrayname'] # Get label directly from fieldinfo arrayname.
         type_labels = ['Rain', 'Snow', 'Sleet', 'Freezing Rain'] # Hard-coded
         if any(len(lst) != ntypes for lst in [colors, threshes, type_labels]):
-            print "data, colors, threshes, and type_labels must all be same length"
-            print ntypes, colors, threshes, type_labels
+            print("data, colors, threshes, and type_labels must all be same length")
+            print(ntypes, colors, threshes, type_labels)
             sys.exit(1)
         # make axes for colorbar, 175px to left and 35px down from bottom of map 
         x0, y0 = self.ax.transAxes.transform((0,0))
@@ -454,10 +454,10 @@ class webPlot:
     def saveFigure(self, trans=False):
         # place NCAR logo 57 pixels below bottom of map, then save image 
         if 'ensprod' in self.opts['fill']:  # CSS needed incase not a fill plot
-	   if not trans and self.opts['fill']['ensprod'] != 'stamp':
-	     x, y = self.ax.transAxes.transform((0,0))
-	     self.fig.figimage(plt.imread('ncar.png'), xo=x, yo=(y-44), zorder=1000)
-	     plt.text(x+10, y-54, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
+            if not trans and self.opts['fill']['ensprod'] != 'stamp':
+                x, y = self.ax.transAxes.transform((0,0))
+                self.fig.figimage(plt.imread('ncar.png'), xo=x, yo=(y-44), zorder=1000)
+                plt.text(x+10, y-54, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
           
         plt.savefig(self.outfile, dpi=90, transparent=trans)
         
@@ -476,7 +476,7 @@ def parseargs():
     parser = argparse.ArgumentParser(description='Web plotting script for NCAR ensemble')
     parser.add_argument('-d', '--date', default=datetime.utcnow().strftime('%Y%m%d00'), help='initialization datetime (YYYYMMDDHH)')
     parser.add_argument('-tr', '--timerange', required=True, help='time range of forecasts (START,END)')
-    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(fieldinfo.keys()))
+    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(list(fieldinfo.keys())))
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-b', '--barb', help='barb field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-bs', '--barbskip', help='barb skip interval')
@@ -545,15 +545,16 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
     file_list    = { 'wrfout':[], 'upp': [], 'diag':[] }
     missing_list = { 'wrfout':[], 'upp': [], 'diag':[] }
 
-    EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/wrfrt/realtime_ensemble/ensf')
-
+    # First convert netcdf4 to netcdf4-classic with nccopy
+    # for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
+    EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/ahijevyc/hwt2017')
     missing_index = 0
     for hr in range(shr,ehr+1):
-            wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H:%M:%S')
+            wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
             yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
             for mem in range(1,ENS_SIZE+1):
                 wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
-                diag   = '%s/%s/wrf_rundir/ens_%d/diags_d02.%s.nc'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
+                diag   = '%s/%s/ens_%d/diag_latlon_g193.%s.nc'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
                 upp    = '%s/%s/post_rundir/mem_%d/fhr_%d/WRFTWO%02d.nc'%(EXP_DIR,yyyymmddhh,mem,hr,hr)
                 if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
                 else: missing_list['wrfout'].append(missing_index)
@@ -566,15 +567,15 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
 
 def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
-    if debug: print fields
+    if debug: print(fields)
 
     datadict = {}
     file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
  
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
-        if not fields[f].keys(): continue
-        if debug: print 'Reading field:', fields[f]['name'], 'from', fields[f]['filename']
+        if not list(fields[f].keys()): continue
+        if debug: print('Reading field:', fields[f]['name'], 'from', fields[f]['filename'])
         
         # save some variables for use in this function
         filename = fields[f]['filename']
@@ -585,13 +586,13 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         if fieldtype[0:3]=='mem': member = int(fieldtype[3:])
         
         # open Multi-file netcdf dataset
-	if debug: print file_list[filename] 
+        if debug: print(file_list[filename]) 
         fh = MFDataset(file_list[filename])
        
         # loop through each field, wind fields will have two fields that need to be read
         datalist = []
         for n,array in enumerate(arrays):
-            if debug: print 'Reading', array
+            if debug: print('Reading', array)
 
             #read in 3D array (times*members,ny,nx) from file object
             if 'arraylevel' in fields[f]:
@@ -671,7 +672,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
                 if fieldtype in ['neprob','neprobgt','neproblt']: data = compute_neprob(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
                 else: data = np.nanmean(data, axis=0) 
                 data = data+0.001 #hack to ensure that plot displays discrete prob values
-          if debug: print 'field', fieldname, 'has shape', data.shape, 'max', data.max(), 'min', data.min()
+          if debug: print('field', fieldname, 'has shape', data.shape, 'max', data.max(), 'min', data.min())
 
           # attach data arrays for each type of field (e.g. { 'fill':[data], 'barb':[data,data] })
           datadict[f].append(data)
@@ -681,10 +682,9 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
     return (datadict, missing_list)
 
 def readGrid(file_dir):
-    f = Dataset('%s/rt2015_latlon_d02.nc'%file_dir, 'r')
-    lats   = f.variables['XLAT'][0,:]
-    lons   = f.variables['XLONG'][0,:]
-    f.close()
+    lats   = np.arange(90.,-90.25,-0.25)
+    lons   = np.arange(0.,360,0.25)
+    lons, lats = np.meshgrid(lons,lats)
     return (lats,lons)
 
 def saveNewMap(domstr='CONUS'):
@@ -723,7 +723,7 @@ def saveNewMap(domstr='CONUS'):
     m.drawstates(linewidth=0.25, ax=ax)
     m.drawcountries(ax=ax)
 
-    pickle.dump((fig,ax,m), open('rt2015_%s.pk'%domstr, 'w'))
+    pickle.dump((fig,ax,m), open('rt2015_%s.pk'%domstr, 'wb'))
 
 def compute_pmm(ensemble):
     mem, dy, dx = ensemble.shape
@@ -797,5 +797,5 @@ def compute_rh(data):
     return 100*rh
 
 def showKeys():
-    print fieldinfo.keys()
+    print(list(fieldinfo.keys()))
     sys.exit()
