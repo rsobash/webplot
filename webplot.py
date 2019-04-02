@@ -10,6 +10,8 @@ import subprocess
 import pdb
 from fieldinfo import *
 from netCDF4 import Dataset, MFDataset
+# use xarray because it can handle muliple files with NETCDF4 non-classic. netCDF4 MFDataset can't do that.
+import xarray
 
 class webPlot:
     '''A class to plot data from NCAR ensemble'''
@@ -239,6 +241,7 @@ class webPlot:
         # smooth some of the fill fields
         if self.opts['fill']['name'] == 'avo500': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=4)
         if self.opts['fill']['name'] == 'pbmin': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=2)
+
         cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
 
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac)
@@ -340,7 +343,7 @@ class webPlot:
 
     def plotBarbs(self):
         skip = self.opts['barb']['skip']
-        if self.domain != 'CONUS': skip = 20
+        if self.domain != 'CONUS': skip = int(skip/2)
         
         if self.opts['fill']['name'] == 'crefuh': alpha=0.5
         else: alpha=1.0
@@ -419,7 +422,7 @@ class webPlot:
                
                # plot, unless file that has fill field is missing, then skip
                if member not in self.missing_members[filename] and member < self.ENS_SIZE:
-                   cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0][memberidx,:], levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
+                   cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0].isel(Time=memberidx), levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
                    memberidx += 1
 
        # use every other tick for large colortables, remove last tick label for both
@@ -539,23 +542,34 @@ def parseargs():
         opts[f] = thisdict
     return opts
 
-def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
+def makeEnsembleList(wrfinit, timerange, ENS_SIZE, debug=False):
     # create lists of files (and missing file indices) for various file types
     shr, ehr = timerange
     file_list    = { 'wrfout':[], 'upp': [], 'diag':[] }
     missing_list = { 'wrfout':[], 'upp': [], 'diag':[] }
 
-    # First convert netcdf4 to netcdf4-classic with nccopy
+    # To use MFDataset, first convert netcdf4 to netcdf4-classic with nccopy
     # for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
     EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/ahijevyc/hwt2017')
+    EXP_DIR = os.getenv('EXP_DIR', '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST')
     missing_index = 0
     for hr in range(shr,ehr+1):
             wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
             yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
+            if debug:
+                print("wrfvalidstr: "+wrfvalidstr)
+                print("yyyymmddhh: "+yyyymmddhh)
             for mem in range(1,ENS_SIZE+1):
-                wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
+                #wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
                 diag   = '%s/%s/ens_%d/diag_latlon_g193.%s.nc'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
-                upp    = '%s/%s/post_rundir/mem_%d/fhr_%d/WRFTWO%02d.nc'%(EXP_DIR,yyyymmddhh,mem,hr,hr)
+                #upp    = '%s/%s/post_rundir/mem_%d/fhr_%d/WRFTWO%02d.nc'%(EXP_DIR,yyyymmddhh,mem,hr,hr)
+                wrfout = diag
+                upp = diag
+                if debug:
+                    if mem == 1:
+                        print("wrfout: "+wrfout)
+                        print("diag: "+diag)
+                        print("upp: "+upp)
                 if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
                 else: missing_list['wrfout'].append(missing_index)
                 if os.path.exists(diag): file_list['diag'].append(diag)
@@ -563,6 +577,17 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
                 if os.path.exists(upp): file_list['upp'].append(upp)
                 else: missing_list['upp'].append(missing_index)
                 missing_index += 1
+    if debug:
+        print("file_list",file_list)
+        print("missing_list", missing_list)
+    if not file_list['wrfout'] and not file_list['diag'] and not file_list['upp']:
+        print("wrfvalidstr: "+wrfvalidstr)
+        print("yyyymmddhh: "+yyyymmddhh)
+        print("wrfout: "+wrfout)
+        print("diag: "+diag)
+        print("upp: "+upp)
+        print("file_list is empty.")
+        pdb.set_trace()
     return (file_list, missing_list)
 
 def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10):
@@ -570,7 +595,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
     if debug: print(fields)
 
     datadict = {}
-    file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
+    file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE, debug=debug) #construct list of files
  
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
@@ -586,8 +611,9 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         if fieldtype[0:3]=='mem': member = int(fieldtype[3:])
         
         # open Multi-file netcdf dataset
-        if debug: print(file_list[filename]) 
-        fh = MFDataset(file_list[filename])
+        if debug: print(file_list[filename])
+        fh = xarray.open_mfdataset(file_list[filename],concat_dim='Time')
+
        
         # loop through each field, wind fields will have two fields that need to be read
         datalist = []
@@ -606,11 +632,11 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
 
             # change units for certain fields
             if array in ['U_PL', 'V_PL', 'UBSHR6','VBSHR6','UBSHR1','VBSHR1','U10','V10', 'U_COMP_STM', 'V_COMP_STM','S_PL','U_COMP_STM_6KM','V_COMP_STM_6KM']:  data = data*1.93 # m/s > kt
-            elif array in ['DEWPOINT_2M', 'T2', 'AFWA_WCHILL', 'AFWA_HEATIDX']:   data = (data - 273.15)*1.8 + 32.0 # K > F 
+            elif array in ['DEWPOINT_2M', 'T2', 't2m', 'AFWA_WCHILL', 'AFWA_HEATIDX']:   data = (data - 273.15)*1.8 + 32.0 # K > F 
             elif array in ['PREC_ACC_NC', 'PREC_ACC_C', 'AFWA_PWAT', 'PWAT', 'AFWA_SNOWFALL', 'AFWA_SNOW', 'AFWA_ICE', 'AFWA_FZRA','AFWA_RAIN_HRLY', 'AFWA_ICE_HRLY','AFWA_SNOWFALL_HRLY', 'AFWA_FZRA_HRLY']:   data = data*0.0393701 # mm > in 
             elif array in ['RAINNC', 'GRPL_MAX', 'SNOW_ACC_NC', 'AFWA_HAIL', 'HAILCAST_DIAM_MEAN', 'HAILCAST_DIAM_STD', 'HAILCAST_DIAM_MAX']:   data = data*0.0393701 # mm > in 
             elif array in ['T_PL', 'TD_PL', 'SFC_LI']:             data = data - 273.15 # K > C
-            elif array in ['AFWA_MSLP', 'MSLP']:                   data = data*0.01 # Pa > hPa
+            elif array in ['AFWA_MSLP', 'MSLP', 'mslp']:                   data = data*0.01 # Pa > hPa
             elif array in ['ECHOTOP']:                             data = data*3.28084# m > ft
             elif array in ['AFWA_VIS', 'VISIBILITY']:              data = (data*0.001)/1.61  # m > mi
             elif array in ['SBCINH', 'MLCINH', 'W_DN_MAX', 'UP_HELI_MIN']: data = data*-1.0 # make cin positive
@@ -700,7 +726,7 @@ def saveNewMap(domstr='CONUS'):
     else:
         ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
         fig_width = domains[domstr]['fig_width']
-        lat_1, lat_2, lon_0 = 32.0, 46.0, -101.0
+        lat_1, lat_2, lon_0 = 38.5, 38.5, -97.5 
 
     dpi = 90
     fig = plt.figure(dpi=dpi)
