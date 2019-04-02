@@ -5,8 +5,10 @@ import sys # for stderr output
 import pdb
 import numpy as np
 import datetime
+import os # for basename
 import matplotlib.path as mpath
 import cartopy
+import sqlite3
 
 def spc_event_filename(event_type):
     name = '/glade/work/ahijevyc/share/SPC/'+event_type+'/'
@@ -33,9 +35,6 @@ def get_storm_reports(
     all_rpts = pd.DataFrame()
     for event_type in event_types:
         rpts_file = spc_event_filename(event_type)
-        if debug:
-            print("input file:",rpts_file)
-            pdb.set_trace()
 
         # csv format described in http://www.spc.noaa.gov/wcm/data/SPC_severe_database_description.pdf
         # SPC storm report files downloaded from http://www.spc.noaa.gov/wcm/#data to 
@@ -50,8 +49,8 @@ def get_storm_reports(
                 "date": str,
                 "tz": np.int32,
                 "st": str,
-                "stf": np.int64,
-                "stn": np.int64,
+                "stf": np.int64, # State FIPS number. some Puerto Rico codes are incorrect
+                "stn": np.int64,  # State number - number of this tornado in this state in this year
                 "mag": np.float64, # you might think there is "sz" for hail and "f" for torn, but all "mag"
                 "inj": np.int64,
                 "fat": np.int64,
@@ -74,7 +73,16 @@ def get_storm_reports(
                 "fc": np.int64,
                 }
         rpts = pd.read_csv(rpts_file, parse_dates=[['date','time']], dtype=dtype, infer_datetime_format=True)
+        if debug:
+            print("input file:",rpts_file)
+            print("read",len(rpts),"lines")
+            pdb.set_trace()
         rpts["event_type"] = event_type
+        rpts["source"] = os.path.basename(rpts_file)
+
+        # -9 = unknown tornado F-scale
+        # Change -9 to NaN
+        rpts["mag"].replace(to_replace=-9, value = np.nan, inplace=True)
 
         # Augment event type for large hail and high wind.
         if event_type == "hail":
@@ -86,28 +94,123 @@ def get_storm_reports(
             if any(highwind):
                 rpts.loc[highwind, "event_type"] = "high wind"
 
+        # Fix tz=6.  This is MDT in the NECI Storm Events database.
+        # This is confusing. A time in MDT is the same as the time in CST.
+        # So simply change tz to 3 (CST).
+        MDT = rpts['tz'] == 6
+        if any(MDT):
+            MDT_timezones = rpts[['om','date_time','tz','event_type', 'source']][MDT]
+            print("get_storm_reports: found",len(MDT_timezones),"MDT time zones")
+            if debug:
+                print(MDT_timezones, file=sys.stderr)
+                print("changing tz from 6 to 3 because CST=MDT")
+                print("WARNING - proceeding with program. Wrote to SPC Apr 1 2019 about fixing these lines", file=sys.stderr)
+            Email20190401PatrickMarsh = "...took over database in 2017 and have no record or documentation as to what those timezones are. Each year I append new information to the end of the old information, so timezones will continue to exist as is until I can learn what those time zones are.  take a look at the NCEI version of storm data. They may have information I do not."
+            rpts.loc[MDT == 6, "tz"] = 3
+        # When timezone = 0, it is 'UNK' (unknown?) in the NCEI Storm Events database.
+        # When timezone = 6, it is 'MDT' (Mountain Daylight Time?) in the NCEI Storm Events database.
+        """
+        om       yr_mo_dy_time  tz county/zone time zone according to NCEI Storm Events
+2507   245 1956-06-01 11:33:00   0 UNK
+2855    89 1957-04-02 23:45:00   0 UNK
+8145   216 1965-05-05 14:45:00   6 MDT
+9569   158 1967-04-21 12:33:00   0 UNK
+13409  264 1972-05-13 18:08:00   0 UNK
+15792  804 1974-08-13 15:03:00   0 UNK
+20640  458 1980-06-04 16:30:00   0 UNK
+22101  271 1982-05-11 14:25:00   0 UNK
+24007  200 1984-04-26 19:32:00   0 CST
+25899  501 1986-07-01 22:15:00   6 MDT
+26054  656 1986-09-04 18:55:00   6 MDT
+28793  419 1990-05-24 15:00:00   6 MDT
+28797  422 1990-05-24 16:00:00   6 MDT
+28810  433 1990-05-24 18:33:00   6 MDT
+29192  815 1990-06-27 20:00:00   6 MDT
+29232  855 1990-07-05 21:10:00   6 MDT
+29347  971 1990-08-15 18:30:00   6 MDT
+33262  151 1994-04-22 18:06:00   6 MDT
+33557  446 1994-05-31 15:00:00   6 MDT
+33572  461 1994-06-06 14:40:00   6 MDT
+33574  463 1994-06-06 15:00:00   6 MDT
+33585  474 1994-06-07 14:47:00   6 MDT
+33586  476 1994-06-07 15:57:00   6 MDT
+33587  477 1994-06-07 16:10:00   6 MDT
+33589  478 1994-06-07 16:35:00   6 MDT
+33592  482 1994-06-07 18:50:00   6 not in Storm Events database
+33783  672 1994-06-29 15:45:00   6 MDT
+33834  722 1994-07-06 18:17:00   6 MDT
+33855  744 1994-07-12 14:30:00   6 MDT
+33886  775 1994-07-18 15:30:00   6 MDT
+33887  776 1994-07-18 16:00:00   6 MDT
+33888  777 1994-07-18 16:25:00   6 MDT
+33889  778 1994-07-18 16:40:00   6 MDT
+33890  779 1994-07-18 16:55:00   6 not in Storm Events database
+33891  780 1994-07-18 16:55:00   6 not in Storm Events database
+33892  781 1994-07-18 17:00:00   6 MDT
+"""            
+
+
+        # All times, except for ?=unknown and 9=GMT, were converted to 3=CST.
         # tz=3 is CST
         # tz=9 is GMT
-        # To convert to UTC, add 9 and subtract tz hours.
-
+        # Convert to UTC by adding 9 and subtracting tz hours.
         rpts["time"] = rpts['date_time'] + pd.to_timedelta(9 - rpts.tz, unit='h')
         # make time-zone aware datetime object
         rpts["time"] = rpts["time"].dt.tz_localize(pytz.UTC)
 
-        if any(rpts['tz'] != 3):
-            print(rpts_file, file=sys.stderr)
-            unexpected_timezones = rpts[['om','date_time','tz']][rpts['tz'] != 3]
-            print("get_storm_reports: found",len(unexpected_timezones),"unexpected timezones")
+        if any(rpts['tz'] == 0):
+            print("reports file: "+rpts_file, file=sys.stderr)
+            unknown_timezones = rpts[['om','date_time','tz','event_type', 'source']][rpts['tz'] == 0]
             if debug:
-                print(unexpected_timezones, file=sys.stderr)
-            print("WARNING - proceeding with program. Wrote to SPC Mar 22 2017 about fixing these lines", file=sys.stderr)
+                print("get_storm_reports: found",len(unknown_timezones),"unknown time zones")
+                print(unknown_timezones, file=sys.stderr)
 
         time_window = (rpts.time >= start) & (rpts.time < end)
         rpts = rpts[time_window]
         if debug:
             print("found",len(rpts),event_type,"reports")
-        all_rpts = all_rpts.append(rpts, ignore_index=True, sort=False)
 
+        # Sanity Check:
+        # Verify I get the same thing as Ryan Sobash's sqlite3 database
+        conn = sqlite3.connect("/glade/u/home/sobash/2013RT/REPORTS/reports_all.db")
+        sqltable = "reports_" + event_type
+        # Could apply a datetime range here (WHERE datetime BETWEEN yyyy/mm/dd hh:mm:ss and blah), but converting from UTC to CST is tricky.
+        sqlcommand = "SELECT * FROM "+sqltable
+        sql_df = pd.read_sql_query(sqlcommand, conn, parse_dates=['datetime'])
+        conn.close()
+        # Add 6 hours to datetime. This converts to UTC.
+        sql_df["datetime"] = sql_df["datetime"] + pd.to_timedelta(6, unit='h')
+        # make it aware of its UTC timezone.
+        sql_df["datetime"] = sql_df["datetime"].dt.tz_localize(pytz.UTC)
+        sql_df = sql_df[(sql_df.datetime >= start) & (sql_df.datetime < end)]
+
+        # See if they have the same number of rows
+        if len(sql_df) != len(rpts):
+            print("My data don't match Ryan's SQL database")
+            pdb.set_trace()
+            sys.exit(1)
+        # See if they have the same times
+        if (sql_df["datetime"].values != rpts["time"].values).any():
+            print("My data times don't match Ryan's SQL database")
+        # See if they have the same locations
+        same_columns = ["slat", "slon", "elat", "elon"]
+        if (sql_df[same_columns].values != rpts[same_columns].values).any():
+            print("My data locations don't match Ryan's SQL database")
+            max_abs_difference = np.max(np.abs(sql_df[same_columns]-rpts[same_columns]))
+            print("max abs difference")
+            print(max_abs_difference)
+            if all(max_abs_difference < 0.000001):
+                print("who cares about such a small difference?")
+            else:
+                pdb.set_trace()
+                sys.exit(1)
+        if debug:
+            print("From Ryan's SQL database")
+            print(sqlcommand)
+            print(sql_df.to_string())
+
+
+        all_rpts = all_rpts.append(rpts, ignore_index=True, sort=False)
 
     return all_rpts
 
@@ -164,24 +267,31 @@ def to_MET(df, gribcode=187):
     # gribcode 187 :lightning
     # INPUT: storm_reports DataFrame from spc.get_storm_reports()
     # Output: MET point observation format, one observation per line.
-    # Use gribcode if specified. Otherwise lightning by default (187).
+    # Use gribcode if specified. Otherwise default.
+    # 10 = WIND
     # 
     # Each observation line will consist of the following 11 columns of data:
     met_columns = ["Message_Type", "Station_ID", "Valid_Time", "Lat", "Lon", "Elevation", "Grib_Code", "Level", "Height", "QC_String", "Observation_Value"]
     
     df["Message_Type"] = "ADPSFC"
-    df["Station_ID"]  = df.stn
+    df["Station_ID"]  = df.st
     df["Valid_Time"] = df.time.dt.strftime('%Y%m%d_%H%M%S') #df.time should be aware of UTC time zone
     df["Lat"]  = (df.slat+df.elat)/2
     df["Lon"]  = (df.slon+df.elon)/2
     df["Elevation"]  = "NA"
-    df["Grib_Code"] = gribcode # 187 :lightning
-    df["Level"] = "NA"
+    df["Grib_Code"] = gribcode
     df["Height"] = "NA"
+    # Change grib_code to 10 (WIND) where event type is wind
+    df.loc[df['event_type'].str.contains('wind'), "Grib_Code"] = 10
+    df.loc[df['event_type'].str.contains('wind'), "Height"] = 10
+    df["Level"] = "NA"
     df["QC_String"] = "NA"
-    df["Observation_Value"] = 1
+    df["Observation_Value"] = df.mag
     # index=False don't write index number
-    return df.to_string(columns=met_columns,index=False,header=False)
+    # Change NaN to "NA" MET considers "NA" missing
+    # This may not matter, but by adding a string 'NA', it changes the format of the entire column. Floats change to integers (or maybe strings). 
+    df.replace(to_replace=np.nan, value = 'NA', inplace=True)
+    return df.to_string(columns=met_columns,index=False,header=False) + "\n"
 
 
 
