@@ -871,16 +871,16 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             #data = data.reshape((10*((timerange[1]+1)-timerange[0])),data.shape[2],data.shape[3]) #reshape again
 
             # change units for certain fields
-            if array in ['U_PL', 'V_PL', 'UBSHR6','VBSHR6','UBSHR1', 'VBSHR1', 'U10','V10', 'U_COMP_STM', 'V_COMP_STM','S_PL','U_COMP_STM_6KM','V_COMP_STM_6KM']:  data = data*1.93 # m/s > kt
-            elif array in ['DEWPOINT_2M', 'T2', 'AFWA_WCHILL', 'AFWA_HEATIDX']:   data = (data - 273.15)*1.8 + 32.0 # K > F 
-            elif array in ['PREC_ACC_NC', 'PREC_ACC_C', 'AFWA_PWAT', 'PWAT', 'AFWA_RAIN', 'AFWA_SNOWFALL', 'AFWA_SNOW', 'AFWA_ICE', 'AFWA_FZRA','AFWA_RAIN_HRLY','AFWA_ICE_HRLY','AFWA_SNOWFALL_HRLY', 'AFWA_FZRA_HRLY']:   data = data*0.0393701 # mm > in             
+            if array in ['U_PL', 'V_PL', 'UBSHR6','VBSHR6','UBSHR1', 'VBSHR1', 'U10','u10','v10','V10', 'U_COMP_STM', 'V_COMP_STM','S_PL','U_COMP_STM_6KM','V_COMP_STM_6KM']:  data = data*1.93 # m/s > kt
+            elif array in ['DEWPOINT_2M', 'T2', 't2m', 'AFWA_WCHILL', 'AFWA_HEATIDX']:   data = (data - 273.15)*1.8 + 32.0 # K > F 
+            elif array in ['PREC_ACC_NC', 'PREC_ACC_C', 'AFWA_PWAT', 'PWAT', 'precipw', 'AFWA_RAIN', 'AFWA_SNOWFALL', 'AFWA_SNOW', 'AFWA_ICE', 'AFWA_FZRA','AFWA_RAIN_HRLY','AFWA_ICE_HRLY','AFWA_SNOWFALL_HRLY', 'AFWA_FZRA_HRLY']:   data = data*0.0393701 # mm > in             
             elif array in ['RAINNC', 'GRPL_MAX', 'SNOW_ACC_NC', 'AFWA_HAIL', 'HAILCAST_DIAM_MAX']:   data = data*0.0393701 # mm > in 
             elif array in ['T_PL', 'TD_PL', 'SFC_LI']:             data = data - 273.15 # K > C
-            elif array in ['AFWA_MSLP', 'MSLP']:                   data = data*0.01 # Pa > hPa
+            elif array in ['AFWA_MSLP', 'MSLP', 'mslp']:                   data = data*0.01 # Pa > hPa
             elif array in ['ECHOTOP']:                             data = data*3.28084# m > ft
             elif array in ['UP_HELI_MIN']:                             data = np.abs(data)
             elif array in ['AFWA_VIS', 'VISIBILITY']:                            data = (data*0.001)/1.61  # m > mi
-            elif array in ['SBCINH', 'MLCINH', 'W_DN_MAX']:        data = data*-1.0 # make cin positive
+            elif array in ['SBCINH', 'MLCINH', 'W_DN_MAX', 'sbcin', 'mlcin']:        data = data*-1.0 # make cin positive
             elif array in ['PVORT_320K']:                          data = data*1000000 # multiply by 1e6
             elif array in ['SBT123_GDS3_NTAT','SBT124_GDS3_NTAT','GOESE_WV','GOESE_IR']: data = data -273.15 # K -> C
             elif array in ['HAIL_MAXK1', 'HAIL_MAX2D']:            data = data*39.3701 #  m -> inches
