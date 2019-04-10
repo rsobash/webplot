@@ -2,7 +2,7 @@ import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import *
 from datetime import *
-import cPickle as pickle
+import pickle as pickle
 import os, sys, time, argparse
 import scipy.ndimage as ndimage
 import subprocess
@@ -18,7 +18,7 @@ class webPlot:
         self.debug = self.opts['debug']
         self.autolevels = self.opts['autolevels']
         self.domain = self.opts['domain']
-        if ',' in self.opts['timerange']: self.shr, self.ehr = map(int, self.opts['timerange'].split(','))
+        if ',' in self.opts['timerange']: self.shr, self.ehr = list(map(int, self.opts['timerange'].split(',')))
 	else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
         self.createFilename()
         self.ENS_SIZE = int(os.getenv('ENS_SIZE', 10))
@@ -319,7 +319,7 @@ def parseargs():
     parser = argparse.ArgumentParser(description='Web plotting script for NCAR ensemble')
     parser.add_argument('-d', '--date', default=datetime.utcnow().strftime('%Y%m%d00'), help='initialization datetime (YYYYMMDDHH)')
     parser.add_argument('-tr', '--timerange', required=True, help='time range of forecasts (START,END)')
-    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(fieldinfo.keys()))
+    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(list(fieldinfo.keys())))
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-b', '--barb', help='barb field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-bs', '--barbskip', help='barb skip interval')
@@ -410,15 +410,15 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
 
 def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
-    if debug: print fields
+    if debug: print(fields)
     
     datadict = {}
     file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
  
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
-        if not fields[f].keys(): continue
-        if debug: print 'Reading field:', fields[f]['name'], 'from', fields[f]['filename']
+        if not list(fields[f].keys()): continue
+        if debug: print('Reading field:', fields[f]['name'], 'from', fields[f]['filename'])
         
         # save some variables for use in this function
         filename = fields[f]['filename']
@@ -429,13 +429,13 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         if fieldtype[0:3]=='mem': member = int(fieldtype[3:])
         
         # open Multi-file netcdf dataset
-	if debug: print file_list[filename] 
+	if debug: print(file_list[filename]) 
         fh = MFDataset(file_list[filename])
        
         # loop through each field, wind fields will have two fields that need to be read
         datalist = []
         for n,array in enumerate(arrays):
-            if debug: print 'Reading', array
+            if debug: print('Reading', array)
 
             #read in 3D array (times*members,ny,nx) from file object
             if 'arraylevel' in fields[f]:
@@ -467,7 +467,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             datalist.append(data)
 
         # these are derived fields, we don't have in any of the input files but we can compute
-        print datalist[0].shape
+        print(datalist[0].shape)
         if 'name' in fields[f]:
             if fieldname in ['shr06mag', 'shr01mag', 'bunkmag','speed10m']: datalist = [np.sqrt(datalist[0]**2 + datalist[1]**2)]
             elif fieldname == 'stp': datalist = [computestp(datalist)]
@@ -509,9 +509,9 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
           elif (fieldtype[0:3] == 'mem'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
                 data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
-                print fieldname
+                print(fieldname)
                 if fieldname in ['precip', 'precipacc']:
-                    print 'where we should be'
+                    print('where we should be')
                     data = np.nanmax(data, axis=0)
                 else:                      data = np.nanmax(data, axis=0)
                 data = data[member-1,:] 
@@ -529,7 +529,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0)
                 data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
                 data = compute_prob3d(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
-          if debug: print 'field', fieldname, 'has shape', data.shape, 'max', data.max(), 'min', data.min()
+          if debug: print('field', fieldname, 'has shape', data.shape, 'max', data.max(), 'min', data.min())
 
           # attach data arrays for each type of field (e.g. { 'fill':[data], 'barb':[data,data] })
           datadict[f].append(data)
@@ -587,7 +587,7 @@ def saveNewMap(domstr='CONUS', wrfout=None):
     #x,y,w,h = 0.01, 0.8/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height) #too much padding at top
     x,y,w,h = 0.01, 0.7/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height)
     ax = fig.add_axes([x,y,w,h])
-    for i in ax.spines.itervalues(): i.set_linewidth(0.5)
+    for i in ax.spines.values(): i.set_linewidth(0.5)
 
     m.drawcoastlines(linewidth=0.5, ax=ax)
     m.drawstates(linewidth=0.25, ax=ax)
@@ -626,14 +626,14 @@ def compute_neprob(ensemble, roi=0, sigma=0.0, type='gaussian'):
     return ens_mean
 
 def compute_prob3d(ensemble, roi=0, sigma=0.0, type='gaussian'):
-    print ensemble.shape
+    print(ensemble.shape)
     y,x = np.ogrid[-roi:roi+1, -roi:roi+1]
     kernel = x**2 + y**2 <= roi**2
     ens_roi = ndimage.filters.maximum_filter(ensemble, footprint=kernel[np.newaxis,np.newaxis,:])
 
-    print ens_roi.shape
+    print(ens_roi.shape)
     ens_mean = np.nanmean(ens_roi, axis=1)
-    print ens_mean.shape
+    print(ens_mean.shape)
     ens_mean = ndimage.filters.gaussian_filter(ens_mean, [2,20,20])
     return ens_mean[3,:]
 
