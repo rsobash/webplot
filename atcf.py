@@ -1,6 +1,7 @@
 import pandas as pd
 import pdb
 import re
+import pint
 import csv
 import os, sys
 from netCDF4 import Dataset
@@ -247,6 +248,9 @@ def read(ifile = ifile, debug=False, fullcircle=False):
         df['rad3'] = 0
         df['rad4'] = 0
 
+
+    # Tried converting to MultiIndex DataFrame but it led to all sorts of problems.
+
     return df
 
 def x2s(x):
@@ -305,23 +309,35 @@ thresh_kts = np.array([34, 50, 64])
 
 
 def get_max_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, quads=quads, thresh_kts=thresh_kts, debug=False):
+    # speed_kts is converted to masked array. Masked where distance >= 300 nm
     rad_nm = {}
     # Put in dictionary "rad_nm" where rad_nm = {
     #                                       34: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4},
     #                                       50: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4},
     #                                       64: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4} 
     #                                     }
+
+
     rad_nm['raw_vmax_kts'] = raw_vmax_kts
     rad_nm['thresh_kts'] = thresh_kts
     rad_nm['quads'] = quads
+
+    # Originally had distance_km < 800, but Chris D. suggested 300nm in Sep 2018 email
+    # This was to deal with Irma and the unrelated 34 knot onshore flow in Georgia
+    # Looking at HURDAT2 R34 sizes (since 2004), ex-tropical storm Karen 2015 had 710nm.
+    # Removing EX storms, the max was 480 nm in Hurricane Sandy 2012
+    speed_kts = np.ma.array(speed_kts, mask = distance_km >= 300./km2nm)
+
     for wind_thresh_kts in thresh_kts[thresh_kts < raw_vmax_kts]:
+        ithresh = speed_kts >= wind_thresh_kts
+        # warn if max_dist_of_wind_threshold is on edge of domain
+        imax = np.argmax(distance_km * ithresh)
+        iedge = np.unravel_index(imax, distance_km.shape)
+        if iedge[0] == distance_km.shape[0]-1 or iedge[1] == distance_km.shape[1]-1 or any(iedge) == 0:
+            print("get_max_ext_of_wind(): R"+str(wind_thresh_kts)+" at edge of domain",iedge,"shape:",distance_km.shape)
         rad_nm[wind_thresh_kts] = {}
         for quad,az in quads.items():
-            # Originally had distance_km < 800, but Chris D. suggested 300nm in Sep 2018 email
-            # This was to deal with Irma and the unrelated 34 knot onshore flow in Georgia
-            # Looking at HURDAT2 R34 sizes (since 2004), ex-tropical storm Karen 2015 had 710nm.
-            # Removing EX storms, the max was 480 nm in Hurricane Sandy 2012
-            iquad = (az <= bearing) & (bearing < az+90) & (speed_kts >= wind_thresh_kts) & (distance_km < 300./km2nm)
+            iquad = (az <= bearing) & (bearing < az+90) & (speed_kts >= wind_thresh_kts)
             rad_nm[wind_thresh_kts][quad] = 0
             if np.sum(iquad) > 0:
                 max_dist_of_wind_threshold = np.max(distance_km[iquad]) * km2nm
@@ -333,7 +349,6 @@ def get_max_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, quads=qua
 
 
 def derived_winds(u10, v10, mslp, lonCell, latCell, row, vmax_search_radius=250., mslp_search_radius=100., debug=False):
-
 
     # Given a row (with row.lon and row.lat)...
 
@@ -353,15 +368,15 @@ def derived_winds(u10, v10, mslp, lonCell, latCell, row, vmax_search_radius=250.
     if row.lat < 0:
         Vt = -Vt
 
-    # Restrict Vmax search
+    # Restrict Vmax search to a certain radius (vmax_search_radius)
     vmaxrad = distance_km < vmax_search_radius
     ispeed_max = np.argmax(speed_kts[vmaxrad])
     raw_vmax_kts =  speed_kts[vmaxrad].max()
 
-    # Check if tangential component of max wind is negative (anti-cyclonic)
-    if Vt[vmaxrad][ispeed_max] < 0:
+    # If vmax > 17, check if tangential component of max wind is negative (anti-cyclonic)
+    if row.vmax > 17 and Vt[vmaxrad][ispeed_max] < 0:
         print("center", row.valid_time, row.lat, row.lon)
-        print("max wind is anti-cyclonic!", Vt[vmaxrad][ispeed_max])
+        print("max wind is anti-cyclonic! (unknown units)", Vt[vmaxrad][ispeed_max])
         print("max wind lat/lon", latCell[vmaxrad][ispeed_max], lonCell[vmaxrad][ispeed_max])
         print("max wind U/V",         u10[vmaxrad][ispeed_max],     v10[vmaxrad][ispeed_max])
         if debug: pdb.set_trace()
@@ -400,16 +415,23 @@ def add_wind_rad_lines(row, rad_nm, fullcircle=False, debug=False):
     for thresh in thresh_kts[thresh_kts < raw_vmax_kts]:
         if any(rad_nm[thresh].values()):
             newrow = row.copy()
-            newrow[['windcode','rad','rad1','rad2','rad3','rad4']] = ['NEQ', thresh, rad_nm[thresh]['NE'], rad_nm[thresh]['SE'], rad_nm[thresh]['SW'], rad_nm[thresh]['NW']]
-            # Append row with 34, 50, or 64 knot radii
-            lines = lines.append(newrow)
+            newrow.rad = thresh
             if fullcircle:
                 # Append row with full circle 34, 50, or 64 knot radius
                 # MET-TC will not derive this on its own - see email from John Halley-Gotway Oct 11, 2018
                 # Probably shouldn't have AAA and NEQ in same file. 
-                newrow = row.copy()
-                newrow[['windcode','rad','rad1']] = ['AAA',thresh, np.nanmax(list(rad_nm[thresh].values()))] 
-                lines = lines.append(newrow)
+                newrow[['windcode','rad1']] = ['AAA',np.nanmax(list(rad_nm[thresh].values()))] 
+                newrow[['rad2','rad3','rad4']] = np.nan
+            else:
+                newrow['windcode'] = 'NEQ' 
+                newrow[['rad1','rad2','rad3','rad4']] = [
+                        rad_nm[thresh]['NE'],
+                        rad_nm[thresh]['SE'],
+                        rad_nm[thresh]['SW'],
+                        rad_nm[thresh]['NW']
+                        ]
+            # Append row with 34, 50, or 64 knot radii
+            lines = lines.append(newrow)
     
     return lines
 
@@ -419,31 +441,30 @@ def update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=False):
     # Called by origgrid and origmesh
 
     if debug:
-        print('before', row[['valid_time','lon','lat', 'vmax', 'minp', 'rmw']]) 
-    row.vmax = raw_vmax_kts
-    row.minp = raw_minp
-    row.rmw  = raw_RMW_nm
+        print("atcf.update_df: before update_df\n", row[['valid_time','lon','lat', 'vmax', 'minp', 'rmw']]) 
+    row["vmax"] = raw_vmax_kts
+    row["minp"] = raw_minp
+    row["rmw"]  = raw_RMW_nm
     # Add note of original mesh = True in user data (not defined) column
-    row.userdata += 'origmeshTrue'
+    if 'origmeshTrue' not in row.userdata:
+        if debug:
+            print(row, " is already from original mesh.")
+        row.userdata += 'origmeshTrue'
     if debug:
         print('after', row[['vmax', 'minp', 'rmw']]) 
 
-    # Can't get rid of SettingWithCopyWarning! 
     df.loc[row.name,:] = row
-
 
     # Append 34/50/64 knot lines to DataFrame
     newlines = add_wind_rad_lines(row, rad_nm, debug=debug)
-    # If there are new lines, drop the old one and append new ones. 
+    # If there are new lines, drop the old one and append new ones.
     if not newlines.empty:
+        if debug:
+            print("dropping", row.name)
         df.drop(row.name, inplace=True)
-        df = df.append(newlines)
-
-
-
-    # Sort DataFrame by index (deal with appended wind radii lines)
-    # sort by rad too
-    df = df.sort_index().sort_values(['initial_time','fhr','rad'])
+        if debug:
+            print("appending ", newlines)
+        df = df.append(newlines, sort=False)
 
     return df
 
@@ -527,7 +548,7 @@ def write(ofile, df, fullcircle=False, debug=False):
     # replace ',  XX,' with ', XX,'
     # replace 'nan' with '   '
     junk = [j.replace(',  ', ', ', 3).replace(',  XX,',', XX,').replace('nan','   ') for j in junk]
-    #delete space before windcode
+    #delete space before windcode (e.g. NEQ)
     junk = [j[:68]+j[69:] for j in junk]
     #delete space before initials
     junk = [j[:133]+j[134:] for j in junk]
@@ -546,6 +567,49 @@ def write(ofile, df, fullcircle=False, debug=False):
     f.close()
     print("wrote", ofile)
 
+def origgridWRF(df, griddir, grid="d03", debug=False):
+    # Get vmax, minp, radius of max wind, max radii of wind thresholds from WRF by Alex Kowaleski
+    
+    WRFmember = df.model.str.extract(r'WF(\d\d)', flags=re.IGNORECASE)
+    # column 0 will have match or null
+    if pd.isnull(WRFmember[0]).any():
+        if debug:
+            print('Assuming WRF ensemble member, but not all model strings match WF\d\d')
+            print(df)
+        sys.exit(1)
+    ens = int(WRFmember[0][0]) # strip leading zero
+    if ens < 1:
+        sys.exit(2)
+    for index, row in df.iterrows():
+        gridfile = "EPS_"+str(ens)+"/"+ "E"+str(ens)+"_"+row.initial_time.strftime('%m%d%H') + \
+            "_"+grid+"_"+ row.valid_time.strftime('%Y-%m-%d_%H:%M:%S') +"_ll.nc"
+        print('opening ' + griddir + gridfile)
+        nc = Dataset(griddir + gridfile, "r")
+        lon = nc.variables['lon'][:]
+        lat = nc.variables['lat'][:]
+        lonCell,latCell = np.meshgrid(lon, lat)
+        iTime = 0
+        u10  = nc.variables['u10'][iTime,:,:]
+        v10  = nc.variables['v10'][iTime,:,:]
+        mslpvar = nc.variables['slp']
+        if mslpvar.units != 'hPa':
+            print("atcf.origgridWRF: unexpected units for mslp: "+mslpvar.units)
+            sys.exit(1)
+        mslp = mslpvar[iTime,:,:] * 100.
+        print('closing ' + griddir + gridfile)
+        nc.close()
+
+        if debug:
+            print("Extract vmax, RMW, minp, and radii of wind thresholds from row", row.name)
+        raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = derived_winds(u10, v10, mslp, lonCell, latCell, row, debug=debug)
+        df = update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=debug)
+
+    # Sort DataFrame by index (deal with appended wind radii lines)
+    # sort by rad too
+    df = df.sort_index().sort_values(['initial_time','fhr','rad'])
+    return df
+
+
 
 def origgrid(df, griddir, debug=False):
     # Get vmax, minp, radius of max wind, max radii of wind thresholds from ECMWF grid, not from tracker.
@@ -555,6 +619,7 @@ def origgrid(df, griddir, debug=False):
     #   ECMWF ensemble member in directory named "ens_xx" (where xx is the 2-digit ensemble member). 
     #   File path is "ens_xx/${gs}yyyymmddhh.xx.nc", where ${gs} is the grid spacing (0p15, 0p25, or 0p5).
 
+    # TODO: Why group rows by initial_time and model? Why not process each row independently?
     for run_id, group in df.groupby(['initial_time', 'model']):
         initial_time, model = run_id
         m = re.search(r'EE(\d\d)', model)
