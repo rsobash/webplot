@@ -57,7 +57,7 @@ class webPlot:
         LATLON_FILE = os.getenv('LATLON_FILE', PYTHON_SCRIPTS_DIR+'/rt2015_latlon_d02.nc')
         #self.lats, self.lons = readGrid(LATLON_FILE)
         self.lats, self.lons, self.grid_spacing_km = readGridMPAS()
-        self.ibox = (self.m.lonmin-10 <= self.lons ) & (self.lons < self.m.lonmax+10) & (self.m.latmin-10 <= self.lats) & (self.lats < self.m.latmax+10)
+        self.ibox = (self.m.lonmin-1 <= self.lons ) & (self.lons < self.m.lonmax+1) & (self.m.latmin-1 <= self.lats) & (self.lats < self.m.latmax+1)
         self.lats = self.lats[self.ibox]
         self.lons = self.lons[self.ibox]
         self.x, self.y = self.m(self.lons,self.lats)
