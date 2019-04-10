@@ -8,11 +8,12 @@ import scipy.ndimage as ndimage
 from scipy import interpolate
 import subprocess
 import pdb
+from scipy.interpolate import griddata
 from fieldinfo import *
 # To use MFDataset, first convert netcdf4 to netcdf4-classic with nccopy
 # for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
 from netCDF4 import Dataset, MFDataset
-# use xarray because it can handle muliple files with NETCDF4 non-classic. netCDF4 MFDataset can't do that.
+# xarray can handle muliple files with NETCDF4 non-classic. netCDF4 MFDataset can't do that.
 import xarray
 
 class webPlot:
@@ -55,7 +56,10 @@ class webPlot:
         # load lat/lons
         LATLON_FILE = os.getenv('LATLON_FILE', PYTHON_SCRIPTS_DIR+'/rt2015_latlon_d02.nc')
         #self.lats, self.lons = readGrid(LATLON_FILE)
-        self.lats, self.lons = readGridMPAS()
+        self.lats, self.lons, self.grid_spacing_km = readGridMPAS()
+        self.ibox = (self.m.lonmin-10 <= self.lons ) & (self.lons < self.m.lonmax+10) & (self.m.latmin-10 <= self.lats) & (self.lats < self.m.latmax+10)
+        self.lats = self.lats[self.ibox]
+        self.lons = self.lons[self.ibox]
         self.x, self.y = self.m(self.lons,self.lats)
 
     def readEnsemble(self):
@@ -325,10 +329,10 @@ class webPlot:
         # smooth some of the fill fields
         if self.opts['fill']['name'] == 'avo500': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=4)
         if self.opts['fill']['name'] == 'pbmin': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=2)
-     
+      
         # Sometimes you get a warning kwarg tri is ignored. 
         # Tried removing tri=True but got IndexError: too many indices for array
-        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, tri=True, extend='max', ax=self.ax) #MPAS
+        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0][self.ibox], levels=levels, cmap=cmap, norm=norm, tri=True, extend='max', ax=self.ax) #MPAS
         #cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
 
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac)
@@ -404,9 +408,9 @@ class webPlot:
         norm = colors.BoundaryNorm(levels, cmap.N)
         tick_labels = levels[:-1]
 
-        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
-        self.m.contourf(self.x, self.y, self.data['fill'][1], levels=[75,1000], colors='black', ax=self.ax, alpha=0.3)
-        self.m.contour(self.x, self.y, self.data['fill'][1], levels=[75], colors='k', linewidth=0.5, ax=self.ax)
+        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, tri=True, norm=norm, extend='max', ax=self.ax)
+        self.m.contourf(self.x, self.y, self.data['fill'][1], levels=[75,1000], colors='black', tri=True, ax=self.ax, alpha=0.3)
+        self.m.contour(self.x, self.y, self.data['fill'][1], levels=[75], colors='k', tri=True, linewidth=0.5, ax=self.ax)
                
         #maxuh = self.data['fill'][1].max()
         #self.ax.text(0.03,0.03,'Domain-wide UH max %0.f'%maxuh ,ha="left",va="top",bbox=dict(boxstyle="square",lw=0.5,fc="white"), transform=self.ax.transAxes)
@@ -421,13 +425,25 @@ class webPlot:
         cb = plt.colorbar(cs, cax=cax, orientation='horizontal', extend=extend, extendfrac=extendfrac, ticks=tick_labels)
         cb.outline.set_linewidth(0.5)
 
+
+    def latlonGrid(self, data):
+        delta_deg = self.grid_spacing_km / 111
+        nlon = (self.m.lonmax - self.m.lonmin)/delta_deg
+        nlat = (self.m.latmax - self.m.latmin)/delta_deg
+        # TODO: maybe do in map coordinates instead of latlon to avoid the need to specify latlon=True in the contour and barb cases.
+        x2d, y2d = np.meshgrid(np.linspace(self.m.lonmin, self.m.lonmax, nlon), np.linspace(self.m.latmin,self.m.latmax,nlat))
+        z2d = griddata((self.lons, self.lats), data, (x2d, y2d), method='nearest')
+        return (x2d, y2d, z2d)
+
     def plotContour(self):
-        if self.opts['contour']['name'] in ['t2-0c']: data = ndimage.gaussian_filter(self.data['contour'][0], sigma=2)
-        else: data = ndimage.gaussian_filter(self.data['contour'][0], sigma=10)
 
         if self.opts['contour']['name'] in ['sbcinh','mlcinh']: linewidth, alpha = 0.5, 0.75
         else: linewidth, alpha = 1.5, 1.0
-        cs2 = self.m.contour(self.x, self.y, data, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
+        x2d, y2d, data = self.latlonGrid(self.data['contour'][0].values[self.ibox])
+        if self.opts['contour']['name'] in ['t2-0c']: data = ndimage.gaussian_filter(data, sigma=2)
+        else: data = ndimage.gaussian_filter(data, sigma=10)
+
+        cs2 = self.m.contour(x2d, y2d, data, latlon=True, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
         plt.clabel(cs2, fontsize='small', fmt='%i')
 
     def plotBarbs(self):
@@ -437,8 +453,13 @@ class webPlot:
         if self.opts['fill']['name'] == 'crefuh': alpha=0.5
         else: alpha=1.0
 
-        cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip], \
-                     color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
+        # skip interval was intended for 2-D fields
+        if len(self.x.shape) == 2:
+            cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
+        if len(self.x.shape) == 1:
+            x2d, y2d, u2d = self.latlonGrid(self.data['barb'][0].values[self.ibox])
+            x2d, y2d, v2d = self.latlonGrid(self.data['barb'][1].values[self.ibox])
+            cs2 = self.m.barbs(x2d[::skip,::skip], y2d[::skip,::skip], u2d[::skip,::skip], v2d[::skip,::skip], latlon=True, color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
     
     def plotStreamlines(self):
         speed = np.sqrt(self.data['barb'][0]**2 + self.data['barb'][1]**2)
@@ -865,7 +886,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             #data = np.swapaxes(data,0,1) # flip first two axes so time is first
             
             # if all times are in one file, then need to reshape and extract desired times
-            #data = data.reshape((10,49,data.shape[1],data.shape[2])) # reshape
+            #data = data.reshape((10,49,*spatial_dimensions)) # reshape
             #data = data[:,timerange[0]:timerange[1]+1,:,:] # extract desired times
             #data = np.swapaxes(data,0,1) # flip first two axes so time is first
             #data = data.reshape((10*((timerange[1]+1)-timerange[0])),data.shape[2],data.shape[3]) #reshape again
@@ -908,6 +929,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         datadict[f] = []
         for data in datalist:
           # perform mean/max/variance/etc to reduce 3D array to 2D
+          spatial_dimensions = data.shape[1:] # works for 1D meshes like MPAS and 2D grids like WRF
           if (fieldtype == 'mean'):  data = np.mean(data, axis=0)
           elif (fieldtype == 'pmm'): data = compute_pmm(data)
           elif (fieldtype == 'max'): data = np.amax(data, axis=0)
@@ -915,26 +937,26 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
           elif (fieldtype == 'var'): data = np.std(data, axis=0)
           elif (fieldtype == 'maxstamp'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
           elif (fieldtype == 'summean'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 data = np.nansum(data, axis=0)
                 data = np.nanmean(data, axis=0)
           elif (fieldtype == 'maxmean'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
                 data = np.nanmean(data, axis=0)
           elif (fieldtype == 'summax'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 data = np.nansum(data, axis=0)
                 data = np.nanmax(data, axis=0)
           elif (fieldtype[0:3] == 'mem'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 print(fieldname)
                 if fieldname in ['precip', 'precipacc']:
                     print('where we should be')
@@ -945,7 +967,6 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
                 if fieldtype in ['prob', 'neprob', 'probgt', 'neprobgt']: data = (data>=thresh).astype('float')
                 elif fieldtype in ['problt', 'neproblt']: data = (data<thresh).astype('float')
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                spatial_dimensions = data.shape[1:]
                 ntimes = int(data.shape[0]/ENS_SIZE)
                 data = np.reshape(data.values, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
@@ -955,7 +976,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
           elif (fieldtype in ['prob3d']):
                 data = (data>=thresh).astype('float')
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0)
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,data.shape[1],data.shape[2]))
+                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
                 data = compute_prob3d(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
           if debug: print('field '+ fieldname+ ' has shape', data.shape, 'max', data.max(), 'min', data.min())
 
@@ -980,9 +1001,12 @@ def readGridMPAS():
     fh = Dataset("/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc", "r")
     lats = fh.variables['latCell'][:]
     lons = fh.variables['lonCell'][:]
-    lats, lons = lats*57.29578, lons*57.29578 #convert radians to degrees
+    areaCell = fh.variables['areaCell'][:] # units m^2
+    max_resolution_km = 2. * np.sqrt(areaCell.min()/np.pi/1000/1000)
     fh.close()
-    return (lats, lons)
+    lats, lons = np.degrees(lats), np.degrees(lons) #convert radians to degrees
+    lons[lons >= 180] = lons[lons >= 180] - 360
+    return (lats, lons, max_resolution_km)
 
 def saveNewMap(domstr='CONUS', wrfout=None):
     # if domstr is not in the dictionary, then use provided wrfout to create new domain
@@ -1025,7 +1049,7 @@ def saveNewMap(domstr='CONUS', wrfout=None):
     #x,y,w,h = 0.01, 0.8/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height) #too much padding at top
     x,y,w,h = 0.01, 0.7/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height)
     ax = fig.add_axes([x,y,w,h])
-    for i in ax.spines.itervalues(): i.set_linewidth(0.5)
+    for i in list(ax.spines.values()): i.set_linewidth(0.5)
 
     m.drawcoastlines(linewidth=0.5, ax=ax)
     m.drawstates(linewidth=0.25, ax=ax)
