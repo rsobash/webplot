@@ -19,7 +19,7 @@ class webPlot:
         self.autolevels = self.opts['autolevels']
         self.domain = self.opts['domain']
         if ',' in self.opts['timerange']: self.shr, self.ehr = list(map(int, self.opts['timerange'].split(',')))
-	else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
+        else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
         self.createFilename()
         self.ENS_SIZE = int(os.getenv('ENS_SIZE', 10))
 
@@ -40,7 +40,7 @@ class webPlot:
     def loadMap(self):
         # load pickle file containing figure and axes objects (should be pregenerated)
         PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '.')   
-        self.fig, self.ax, self.m  = pickle.load(open('%s/%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
+        self.fig, self.ax, self.m  = pickle.load(open('%s/%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'rb'))
 
         # get lat/lons from file here
         LATLON_FILE = os.getenv('LATLON_FILE', PYTHON_SCRIPTS_DIR+'/latlonfile.nc')
@@ -51,7 +51,6 @@ class webPlot:
         self.data, self.missing_members = readEnsemble(self.initdate, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE)
 
     def plotTitleTimes(self):
-        if self.opts['over']: return
         fontdict = {'family':'monospace', 'size':12, 'weight':'bold'}
 
         # place title and times above corners of map
@@ -309,7 +308,7 @@ class webPlot:
             elif self.opts['fill']['ensprod'] in ['prob', 'neprob', 'probgt', 'problt', 'neprobgt', 'neproblt']: ncolors = 48
             elif self.opts['fill']['name'] in ['crefuh']: ncolors = 48
             else: ncolors = 255
-            command = 'pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
+            command = '/glade/u/home/sobash/pngquant/pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
             ret = subprocess.check_call(command.split())
         plt.clf()
 
@@ -331,7 +330,6 @@ def parseargs():
     parser.add_argument('--debug', action='store_true', help='turn on debugging')
 
     opts = vars(parser.parse_args())
-    if opts['interp']: opts['over'] = True
     
     # opts = { 'date':date, 'timerange':timerange, 'fill':'sbcape_prob_25', 'ensprod':'mean' ... }
     # now, convert underscore delimited fill, contour, and barb args into dicts
@@ -429,7 +427,7 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         if fieldtype[0:3]=='mem': member = int(fieldtype[3:])
         
         # open Multi-file netcdf dataset
-	if debug: print(file_list[filename]) 
+        if debug: print(file_list[filename]) 
         fh = MFDataset(file_list[filename])
        
         # loop through each field, wind fields will have two fields that need to be read
