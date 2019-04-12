@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import sys, time, os
-from webplot import webPlot, readGrid, drawOverlay, saveNewMap
+from webplot import webPlot, readGrid, saveNewMap
 
 def log(msg): print(time.ctime(time.time()),':', msg)
 
