@@ -673,7 +673,7 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
             yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
             for mem in range(1,ENS_SIZE+1):
                 wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
-                diag   = '%s/%s/wrf_rundir/ens_%d/diags_d02.%s.nc'%(EXP_DIR,yyymmddhh,mem,wrfvalidstr)
+                diag   = '%s/%s/wrf_rundir/ens_%d/diags_d02.%s.nc'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
                 #diag   = '/glade/scratch/sobash/FOR_MORRIS/%s/mem%d/diags_d02_f%03d.nc'%(yyyymmddhh,mem,hr)
                 upp    = '%s/%s/post_rundir/mem_%d/fhr_%d/WRFTWO%02d.nc'%(EXP_DIR,yyyymmddhh,mem,hr,hr)
                 #ens1   = '/glade/p/nmm0001/romine/rt2015/ens_1km/%s/mem%02d_%s.nc'%(yyyymmddhh,mem,yyyymmddhh)
