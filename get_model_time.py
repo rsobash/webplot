@@ -32,6 +32,7 @@ def valid(ncfilename, diagnostic_name):
         valid_time = initialization_time + forecast_lead_time
     elif 'valid_time' in x.ncattrs():
         valid_time = datetime.datetime.strptime(x.valid_time, '%Y%m%d_%H%M%S')
+        initialization_time = datetime.datetime.strptime(x.init_time, '%Y%m%d_%H%M%S')
     elif 'START_DATE' in global_atts:
         # Like ds300 NCAR WRF ensemble diags files
         initialization_time = datetime.datetime.strptime(nc.START_DATE, '%Y-%m-%d_%H:%M:%S')
