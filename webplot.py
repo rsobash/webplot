@@ -1379,3 +1379,4 @@ def computefrzdepth(t):
     frz_at_surface = np.where(t[0,:] < 33, True, False) #pts where surface T is below 33F
     max_column_t = np.amax(t, axis=0)
     above_frz_aloft = np.where(max_column_t > 32, True, False) #pts where max column T is above 32F
+
