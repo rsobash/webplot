@@ -1,7 +1,7 @@
 import sys
 import pdb
-sys.path.append('/glade/u/home/ahijevyc/lib/python2.7/site-packages/SHARPpy-1.3.0-py2.7.egg')
-sys.path.append('/glade/u/home/ahijevyc/lib/python2.7/site-packages')
+#sys.path.append('/glade/u/home/ahijevyc/lib/python2.7/site-packages/SHARPpy-1.3.0-py2.7.egg')
+#sys.path.append('/glade/u/home/ahijevyc/lib/python2.7/site-packages')
 import sharppy
 import sharppy.sharptab.interp as interp
 import sharppy.sharptab.params as params
@@ -11,7 +11,7 @@ import sharppy.sharptab.utils as utils
 import sharppy.sharptab.winds as winds
 
 import numpy as np
-from StringIO import StringIO
+from io import StringIO
 import matplotlib.pyplot as plt
 import cartopy
 
@@ -34,8 +34,8 @@ def parseCLS(sfile):
     data = np.genfromtxt( sound_data )
     clean_data = []
     for i in data:
-	if i[1] != 9999 and i[2] != 999 and i[3] != 999 and i[7] != 999 and i[8] != 999 and i[14] != 99999:
-	    clean_data.append(i)
+        if i[1] != 9999 and i[2] != 999 and i[3] != 999 and i[7] != 999 and i[8] != 999 and i[14] != 99999:
+            clean_data.append(i)
     p = np.array([i[1] for i in clean_data])
     h = np.array([i[14] for i in clean_data])
     T = np.array([i[2] for i in clean_data])
@@ -48,7 +48,7 @@ def parseCLS(sfile):
     max_points = 250
     s = p.size/max_points
     if s == 0: s = 1
-    print "stride=",s
+    print("stride=",s)
     return p[::s], h[::s], T[::s], Td[::s], wdir[::s], wspd[::s], latitude, longitude
 
 def thetas(tempC, presvals):
@@ -189,16 +189,18 @@ def wind_barb_spaced(ax, prof, xpos=1.0, yspace=0.04):
 
 
 def add_globe(longitude, latitude):
+    # TODO: avoid matplotlib depreciation warning about creating a unique id for each axes instance. You need a new axes
+    # instance whenever lat/lon changes.
     # Globe with dot on location.
     mapax = plt.axes([.795, 0.09,.18,.18], projection=cartopy.crs.Orthographic(longitude, latitude))
     mapax.add_feature(cartopy.feature.OCEAN, zorder=0)
-    mapax.add_feature(cartopy.feature.LAND, zorder=0)
+    mapax.add_feature(cartopy.feature.LAND, zorder=0, linewidth=0) # linewidth=0 or coastlines are fuzzy
     mapax.set_global()
     sloc = mapax.plot(longitude, latitude,'o', color='green', markeredgewidth=0, markersize=4., transform=cartopy.crs.Geodetic())
     return mapax
 
 
-def indices(prof):
+def indices(prof, debug=False):
 
     # return a formatted-string list of stability and kinematic indices
 
@@ -286,7 +288,14 @@ def indices(prof):
 
     # Update the indices within the indices dictionary on the side of the plot.
     string = ''
-    for index, value in sorted(indices.iteritems()):
+    for index, value in sorted(indices.items()):
+        if np.ma.is_masked(value[0]):
+            if debug:
+                print("skipping masked value for index=",index)
+            continue
+        if debug:
+            print("index=",index)
+            print("value=",value)
         format = '%.'+str(value[1])+'f'
         string += index + ": " +  format % value[0] + " " + value[2] + '\n'
 
