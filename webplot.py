@@ -2,13 +2,14 @@ import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import *
 from datetime import *
-import pickle as pickle
+import pickle
 import os, sys, time, argparse
 import scipy.ndimage as ndimage
 from scipy import interpolate
+from scipy.spatial import qhull
 import subprocess
-import pdb
-from scipy.interpolate import griddata
+import mpas, mpas_vort_cell
+import re
 from fieldinfo import *
 # To use MFDataset, first convert netcdf4 to netcdf4-classic with nccopy
 # for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
@@ -45,25 +46,38 @@ class webPlot:
            #self.outfile = prefx+'_f'+'%03d'%self.shr+'-f'+'%03d'%self.ehr+'_'+self.domain+'_'+self.opts['date']+'.png' # 'test.png' # CSS
            self.outfile = prefx+'_f'+'%03d'%self.shr+'-f'+'%03d'%self.ehr+'_'+self.domain+'.png' # 'test.png' # CSS
 
-    def loadMap(self, overlay=False):
-        if overlay:
-          PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/u/home/sobash/RT2015_gpx')   
-          self.fig, self.ax, self.m  = pickle.load(open('%s/overlays/rt2015_overlay_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
-        else:
-          PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/work/ahijevyc/share/rt_ensemble/python_scripts')  
-          self.fig, self.ax, self.m  = pickle.load(open('%s/rt2015_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'rb'))
+        # create yyyymmddhh/domain/ directory if needed
+        subdir_path = os.path.join(self.opts['date'], self.domain)
+        if not os.path.isdir(subdir_path):
+            print("webPlot.createFilename(): making new output directory "+subdir_path)
+            os.mkdir(subdir_path)
+        # prepend subdir_path to outfile.
+        self.outfile = os.path.join(subdir_path, self.outfile)
 
-        # load lat/lons
-        LATLON_FILE = os.getenv('LATLON_FILE', PYTHON_SCRIPTS_DIR+'/rt2015_latlon_d02.nc')
-        #self.lats, self.lons = readGrid(LATLON_FILE)
-        self.lats, self.lons, self.grid_spacing_km = readGridMPAS()
-        self.ibox = (self.m.lonmin-1 <= self.lons ) & (self.lons < self.m.lonmax+1) & (self.m.latmin-1 <= self.lats) & (self.lats < self.m.latmax+1)
-        self.lats = self.lats[self.ibox]
-        self.lons = self.lons[self.ibox]
-        self.x, self.y = self.m(self.lons,self.lats)
+    def toServer(self, debug=False, url="nova.mmm.ucar.edu:/web/htdocs/projects/mpas/plots/."):
+        rsync_opts = '-RL'
+        if debug:
+            rsync_opts += 'v' # append a 'v' for verbose
+        #result = subprocess.run(['rsync', rsync_opts, '--timeout=10', '--bwlimit=3', self.outfile, url], check=True, stdout=subprocess.PIPE) # tried capture_output=True but this version of subprocess doesn't recognize it.
+        # send directly to koa instead of nova. Carter set up ssh keys. Not working. Get return status=14
+        result = subprocess.run(['rsync', '-e',  "'ssh -vi /home/ahijevyc/.ssh/id_rsa'", '-avR', self.outfile, url], check=True, stdout=subprocess.PIPE)
+        #The --contimeout option may only be used when connecting to an rsync daemon
+        if result.returncode != 0:
+            print(result)
+
+    def loadMap(self, overlay=False):
+        if hasattr(self, 'domain'): # once called with empty junk webplot class, just to get lats/lons/x/y/ibox attributes
+            if overlay:
+              PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/u/home/sobash/RT2015_gpx')   
+              self.fig, self.ax, self.m = pickle.load(open('%s/overlays/rt2015_overlay_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
+            else:
+              PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/work/ahijevyc/share/rt_ensemble/python_scripts')
+              pklfile = '%s/rt2015_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain)
+              print("loading "+pklfile) 
+              self.fig, self.ax, self.m, self.lons,self.lats,self.min_grid_spacing_km,self.delta_deg,self.lon2d,self.lat2d,self.x2d,self.y2d,self.ibox,self.x,self.y,self.vtx,self.wts = pickle.load(open(pklfile, 'rb'))
 
     def readEnsemble(self):
-        self.data, self.missing_members = readEnsemble(self.initdate, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE)
+        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE)
 
     def plotDepartures(self):
         from collections import OrderedDict
@@ -82,7 +96,10 @@ class webPlot:
         hr_et        = (self.initdate + timedelta(hours=self.shr) - timedelta(hours=utcoffset-2)).hour # hour in eastern time 
 
         # get interpolated forecast at climate station locations (in F) 
-        fi = interpolate.RegularGridInterpolator((self.y[:,0], self.x[0,:]), self.data['fill'][0], fill_value=-9999, bounds_error=False, method='linear')
+        if len(self.x.shape) == 1:
+            fi = interpolate.RegularGridInterpolator((self.y2d[:,0], self.x2d[0,:]), self.latlonGrid(self.data['fill'][0]), fill_value=-9999, bounds_error=False, method='linear')
+        if len(self.x.shape) == 2:
+            fi = interpolate.RegularGridInterpolator((self.y[:,0], self.x[0,:]), self.data['fill'][0], fill_value=-9999, bounds_error=False, method='linear')
         with open('/glade/u/home/sobash/RT2015_gpx/hly-inventory.txt') as f:
             for line in f:
                 stn = line.split()
@@ -126,7 +143,7 @@ class webPlot:
         x, y = self.fig.transFigure.inverted().transform((x0+10,y0+10))
         w, h = self.fig.get_size_inches()*self.fig.dpi
         cax = self.fig.add_axes([x,y,130/float(w),114/float(h)])
-        cax.set_axis_bgcolor('#dddddd')
+        cax.set_facecolor('#dddddd')
         cax.set_xticks([])
         cax.set_yticks([])
         for i in list(cax.spines.values()): i.set_linewidth(0.5)
@@ -269,14 +286,7 @@ class webPlot:
         x1, y1 = self.ax.transAxes.transform((1,1))
         self.ax.text(x0, y1+10, self.title, fontdict=fontdict, transform=None)
 
-        initstr  = self.initdate.strftime('Init: %a %Y-%m-%d %H UTC') 
-        if ((self.ehr - self.shr) == 0):
-            validstr = (self.initdate+timedelta(hours=self.shr)).strftime('Valid: %a %Y-%m-%d %H UTC')
-        else:
-            validstr1 = (self.initdate+timedelta(hours=(self.shr-1))).strftime('%a %Y-%m-%d %H UTC')
-            validstr2 = (self.initdate+timedelta(hours=self.ehr)).strftime('%a %Y-%m-%d %H UTC')
-            validstr = "Valid: %s - %s"%(validstr1, validstr2)
-
+        initstr, validstr = self.getInitValidStr() 
         self.ax.text(x1, y1+20, initstr, horizontalalignment='right', transform=None)
         self.ax.text(x1, y1+5, validstr, horizontalalignment='right', transform=None)
 
@@ -301,9 +311,9 @@ class webPlot:
             #self.plotStreamlines()
             self.plotBarbs()
        
-        #if self.opts['fill']['name'] in ['t2depart', 'td2depart']: self.plotDepartures()
+        if self.opts['fill']['name'] in ['t2depart', 'td2depart']: self.plotDepartures()
   
-    def plotFill(self):
+    def plotFill(self, debug=False):
         if self.opts['fill']['name'] == 'ptype': self.plotFill_ptype(); return
         if self.opts['fill']['name'][0:6] == 'ptypes': self.plotFill_ptypes(); return
         elif self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
@@ -326,14 +336,29 @@ class webPlot:
                 tick_labels = levels
             norm = colors.BoundaryNorm(levels, cmap.N)
 
-        # smooth some of the fill fields
-        if self.opts['fill']['name'] == 'avo500': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=4)
-        if self.opts['fill']['name'] == 'pbmin': self.data['fill'][0] = ndimage.gaussian_filter(self.data['fill'][0], sigma=2)
-      
-        # Sometimes you get a warning kwarg tri is ignored. 
-        # Tried removing tri=True but got IndexError: too many indices for array
-        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0][self.ibox], levels=levels, cmap=cmap, norm=norm, tri=True, extend='max', ax=self.ax) #MPAS
-        #cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        data = self.data['fill'][0]
+        # regrid 1D mesh that needs to be smoothed
+        if self.opts['fill']['name'] in ['avo500', 'vort500', 'pbmin']:
+            print("plotFill: regridding 1D mesh "+self.opts['fill']['name']+" to lat lon")
+            data = self.latlonGrid(data)
+            # smooth some of the fill fields
+            if self.opts['fill']['name'] == 'avo500': data = ndimage.gaussian_filter(data, sigma=4)
+            if self.opts['fill']['name'] == 'vort500': data = ndimage.gaussian_filter(data, sigma=4)
+            if self.opts['fill']['name'] == 'pbmin' : data = ndimage.gaussian_filter(data, sigma=2)
+            cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        elif self.opts['fill']['ensprod'] in ['neprob', 'neprobgt', 'neproblt']:
+            # assume the data array has been interpolated to lat/lon
+            cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        else:      
+            # use ibox and tri
+            # Sometimes you get a warning kwarg tri is ignored. 
+            # Tried removing tri=True but got IndexError: too many indices for array
+            #print("plotFill: starting contourf with ",self.ibox.shape," array "+self.opts['fill']['name'])
+            #cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0][self.ibox], tri=True, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax) #MPAS
+            data = self.latlonGrid(self.data['fill'][0])
+            if debug:
+                print("plotFill: starting contourf with 2d array")
+            cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
 
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac)
 
@@ -408,9 +433,16 @@ class webPlot:
         norm = colors.BoundaryNorm(levels, cmap.N)
         tick_labels = levels[:-1]
 
-        cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0], levels=levels, cmap=cmap, tri=True, norm=norm, extend='max', ax=self.ax)
-        self.m.contourf(self.x, self.y, self.data['fill'][1], levels=[75,1000], colors='black', tri=True, ax=self.ax, alpha=0.3)
-        self.m.contour(self.x, self.y, self.data['fill'][1], levels=[75], colors='k', tri=True, linewidth=0.5, ax=self.ax)
+        cs1 = self.m.contourf(self.x2d, self.y2d, self.latlonGrid(self.data['fill'][0]), levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        uh =  self.latlonGrid(self.data['fill'][1])
+        self.m.contourf(self.x2d, self.y2d, uh, levels=[100,1000], colors='black', ax=self.ax, alpha=0.3)
+        cs2 = self.m.contour( self.x2d, self.y2d, uh, levels=[100], colors='k', linewidths=0.5, ax=self.ax)
+        # for some reason the zero contour is plotted if there are no other valid contours
+        # are there some small negatives due to regridding? No.
+        if 0.0 in cs2.levels:
+            print("webplot.plotReflectivityUH has zero contour for some reason. Hide it")
+            for i in cs2.collections:
+                i.remove()
                
         #maxuh = self.data['fill'][1].max()
         #self.ax.text(0.03,0.03,'Domain-wide UH max %0.f'%maxuh ,ha="left",va="top",bbox=dict(boxstyle="square",lw=0.5,fc="white"), transform=self.ax.transAxes)
@@ -425,41 +457,51 @@ class webPlot:
         cb = plt.colorbar(cs, cax=cax, orientation='horizontal', extend=extend, extendfrac=extendfrac, ticks=tick_labels)
         cb.outline.set_linewidth(0.5)
 
+    def interpolatetri(self, values, vtx, wts):
+        return np.einsum('nj,nj->n', np.take(values, vtx), wts)
 
     def latlonGrid(self, data):
-        delta_deg = self.grid_spacing_km / 111
-        nlon = (self.m.lonmax - self.m.lonmin)/delta_deg
-        nlat = (self.m.latmax - self.m.latmin)/delta_deg
-        # TODO: maybe do in map coordinates instead of latlon to avoid the need to specify latlon=True in the contour and barb cases.
-        x2d, y2d = np.meshgrid(np.linspace(self.m.lonmin, self.m.lonmax, nlon), np.linspace(self.m.latmin,self.m.latmax,nlat))
-        z2d = griddata((self.lons, self.lats), data, (x2d, y2d), method='nearest')
-        return (x2d, y2d, z2d)
+        # apply ibox to data
+        data = data[self.ibox]
+        if hasattr(self, "vtx") and hasattr(self, "wts"):
+            data_gridded = self.interpolatetri(data, self.vtx, self.wts)
+            data_gridded = np.reshape(data_gridded, self.lat2d.shape)
+        else:
+            print("latlonGrid: interpolating to latlon grid with griddata()")
+            data_gridded = interpolate.griddata((self.lons, self.lats), data, (self.lon2d, self.lat2d), method='nearest')
+        return data_gridded
 
     def plotContour(self):
 
         if self.opts['contour']['name'] in ['sbcinh','mlcinh']: linewidth, alpha = 0.5, 0.75
         else: linewidth, alpha = 1.5, 1.0
-        x2d, y2d, data = self.latlonGrid(self.data['contour'][0].values[self.ibox])
+        data = self.latlonGrid(self.data['contour'][0])
         if self.opts['contour']['name'] in ['t2-0c']: data = ndimage.gaussian_filter(data, sigma=2)
-        else: data = ndimage.gaussian_filter(data, sigma=10)
+        else: data = ndimage.gaussian_filter(data, sigma=25)
 
-        cs2 = self.m.contour(x2d, y2d, data, latlon=True, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
+        cs2 = self.m.contour(self.x2d, self.y2d, data, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
         plt.clabel(cs2, fontsize='small', fmt='%i')
 
-    def plotBarbs(self):
+    def plotBarbs(self, debug=False):
         skip = self.opts['barb']['skip']
-        if self.domain != 'CONUS': skip = int(skip/2)
+        if self.domain != 'CONUS': skip = int(skip*0.45)
+        if self.domain == 'NA': skip = int(skip*2)
 
         if self.opts['fill']['name'] == 'crefuh': alpha=0.5
         else: alpha=1.0
 
+
+        if debug: print("plotBarbs: starting barbs")
         # skip interval was intended for 2-D fields
         if len(self.x.shape) == 2:
             cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
         if len(self.x.shape) == 1:
-            x2d, y2d, u2d = self.latlonGrid(self.data['barb'][0].values[self.ibox])
-            x2d, y2d, v2d = self.latlonGrid(self.data['barb'][1].values[self.ibox])
-            cs2 = self.m.barbs(x2d[::skip,::skip], y2d[::skip,::skip], u2d[::skip,::skip], v2d[::skip,::skip], latlon=True, color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
+            u2d = self.latlonGrid(self.data['barb'][0])
+            v2d = self.latlonGrid(self.data['barb'][1])
+            # rotate vectors so they represent the direction properly on the map projection
+            u10_rot, v10_rot, x, y = self.m.rotate_vector(u2d, v2d, self.lon2d, self.lat2d, returnxy=True)
+            #cs2 = self.m.barbs(self.x2d[::skip,::skip], self.y2d[::skip,::skip], u2d[::skip,::skip], v2d[::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
+            cs2 = self.m.barbs(x[::skip,::skip], y[::skip,::skip], u10_rot[::skip,::skip], v10_rot[::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
     
     def plotStreamlines(self):
         speed = np.sqrt(self.data['barb'][0]**2 + self.data['barb'][1]**2)
@@ -473,7 +515,7 @@ class webPlot:
        colorlist = self.opts['fill']['colors']
        levels = self.opts['fill']['levels']
        for i in range(self.data['fill'][0].shape[0]):
-           cs = self.m.contourf(self.x, self.y, self.data['fill'][0][i,:], levels=levels, colors=[colorlist[i%len(colorlist)]], ax=self.ax, alpha=0.5)
+           cs = self.m.contourf(self.x, self.y, self.data['fill'][0][i,self.ibox], tri=True, levels=levels, colors=[colorlist[i%len(colorlist)]], ax=self.ax, alpha=0.5)
            rects.append(plt.Rectangle((0,0),1,1,fc=colorlist[i%len(colorlist)]))
            labels.append("member %d"%(i+1))
 
@@ -492,7 +534,7 @@ class webPlot:
        #plt.legend(proxy, ["member %d"%i for i in range(1,11)], ncol=5, loc='right', bbox_to_anchor=(1.0,-0.05), fontsize=11, \
        #           frameon=False, borderpad=0.25, borderaxespad=0.25, handletextpad=0.2)
 
-    def plotStamp(self):
+    def plotStamp(self, debug=False):
        fig_width_px, dpi = 1280, 90
        fig = plt.figure(dpi=dpi)
 
@@ -520,7 +562,8 @@ class webPlot:
                w, h = (width_per_panel/float(fig_width))-spacing_w, (height_per_panel/float(fig_height))-spacing_h
                if member == 9: y = 0
 
-               #print 'member', member, 'creating axes at', x, y
+               if debug:
+                   print('member', member, 'creating axes at', x, y)
                thisax = fig.add_axes([x,y,w,h])
 
                thisax.axis('on')
@@ -532,7 +575,10 @@ class webPlot:
                
                # plot, unless file that has fill field is missing, then skip
                if member not in self.missing_members[filename] and member < self.ENS_SIZE:
-                   cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0].isel(Time=memberidx), levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
+                   data = self.latlonGrid(self.data['fill'][0][memberidx,:])
+                   if debug:
+                       print("plotStamp: starting contourf with regridded array", memberidx)
+                   cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
                    memberidx += 1
 
        # use every other tick for large colortables, remove last tick label for both
@@ -547,13 +593,7 @@ class webPlot:
 
        # add init/valid text
        fontdict = {'family':'monospace', 'size':13, 'weight':'bold'}
-       initstr  = self.initdate.strftime(' Init: %a %Y-%m-%d %H UTC')
-       if ((self.ehr - self.shr) == 0):
-            validstr = (self.initdate+timedelta(hours=self.shr)).strftime('Valid: %a %Y-%m-%d %H UTC')
-       else:
-            validstr1 = (self.initdate+timedelta(hours=(self.shr-1))).strftime('%a %Y-%m-%d %H UTC')
-            validstr2 = (self.initdate+timedelta(hours=self.ehr)).strftime('%a %Y-%m-%d %H UTC')
-            validstr = "Valid: %s - %s"%(validstr1, validstr2)
+       initstr, validstr = self.getInitValidStr() 
 
        fig.text(0.51, 0.22, self.title, fontdict=fontdict, transform=fig.transFigure)
        fig.text(0.51, 0.22 - 25/float(fig_height_px), initstr, transform=fig.transFigure)
@@ -563,6 +603,23 @@ class webPlot:
        x, y = fig.transFigure.transform((0.51,0))
        fig.figimage(plt.imread('ncar.png'), xo=x, yo=y+15, zorder=1000)
        plt.text(x+10, y+5, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
+
+
+    def getInitValidStr(self):
+       initstr  = self.initdate.strftime(' Init: %a %Y-%m-%d %H UTC')
+       if ((self.ehr - self.shr) == 0):
+            validstr = (self.initdate+timedelta(hours=self.shr)).strftime('Valid: %a %Y-%m-%d %H UTC')
+       else:
+            # match precip or precip-24hr, but not precipacc
+            # accept precip-24hr, precip-48hr, precip-120hr, etc.
+            if self.opts['fill']['name'] == 'precip' or is_precip_diff(self.opts['fill']['name']):
+                # do not subtract 1 from start hour if array is difference of accumulated precipitation
+                validstr1 = (self.initdate+timedelta(hours=(self.shr))).strftime('%a %Y-%m-%d %H UTC')
+            else:
+                validstr1 = (self.initdate+timedelta(hours=(self.shr-1))).strftime('%a %Y-%m-%d %H UTC')
+            validstr2 = (self.initdate+timedelta(hours=self.ehr)).strftime('%a %Y-%m-%d %H UTC')
+            validstr = "Valid: %s - %s"%(validstr1, validstr2)
+       return initstr, validstr
 
     def saveFigure(self, trans=False):
         # place NCAR logo 57 pixels below bottom of map, then save image 
@@ -580,7 +637,12 @@ class webPlot:
             elif self.opts['fill']['ensprod'] in ['prob', 'neprob', 'probgt', 'problt', 'neprobgt', 'neproblt']: ncolors = 48
             elif self.opts['fill']['name'] in ['crefuh']: ncolors = 48
             else: ncolors = 255
-            command = '/glade/u/home/sobash/pngquant/pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
+            #command = '/glade/u/home/sobash/pngquant/pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
+            if os.environ['NCAR_HOST'] == "cheyenne":
+                bindir= '/glade/u/home/ahijevyc/bin_cheyenne/'
+            else:
+                bindir= '/glade/u/home/ahijevyc/bin/'
+            command = bindir + 'pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
             ret = subprocess.check_call(command.split())
         plt.clf()
 
@@ -620,12 +682,15 @@ def parseargs():
             
             # assign contour levels and colors
             if (input[1] in ['prob', 'neprob', 'probgt', 'problt', 'neprobgt', 'neproblt', 'prob3d']):
+                if len(input)<3:
+                    print("your -f option has less than 3 components. It needs name, ensprod, and thresh.")
+                    sys.exit(1)
                 thisdict['thresh']  = float(input[2])
                 if int(opts['sigma']) != 40: thisdict['levels']  = np.arange(0.1,1.1,0.1)
                 else: thisdict['levels']  = [0.02,0.05,0.1,0.15,0.2,0.25,0.35,0.45,0.6]
-                thisdict['levels'] = np.arange(0.1,1.1,0.2)
+                #thisdict['levels'] = np.arange(0.1,1.1,0.2)
                 thisdict['colors']  = readNCLcm('perc2_9lev')
-                thisdict['colors']  = ['#d9d9d9', '#bdbdbd', '#969696', '#636363', '#252525']
+                #thisdict['colors']  = ['#d9d9d9', '#bdbdbd', '#969696', '#636363', '#252525'] # greyscale
             elif (input[1] in ['paintball', 'spaghetti']):
                 thisdict['thresh']  = float(input[2])
                 thisdict['levels']  = [float(input[2]), 1000]
@@ -675,6 +740,7 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
                 wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
                 diag   = '%s/%s/wrf_rundir/ens_%d/diags_d02.%s.nc'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
                 #diag   = '/glade/scratch/sobash/FOR_MORRIS/%s/mem%d/diags_d02_f%03d.nc'%(yyyymmddhh,mem,hr)
+                diag   = '/glade/scratch/sobash/FOR_MORRIS/%s/mem%d/diags_d02_f%03d.nc'%(yyyymmddhh,mem,hr)
                 upp    = '%s/%s/post_rundir/mem_%d/fhr_%d/WRFTWO%02d.nc'%(EXP_DIR,yyyymmddhh,mem,hr,hr)
                 #ens1   = '/glade/p/nmm0001/romine/rt2015/ens_1km/%s/mem%02d_%s.nc'%(yyyymmddhh,mem,yyyymmddhh)
                 if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
@@ -746,7 +812,7 @@ def makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE):
 
     return (file_list, missing_list)
 
-def makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, debug=False):
+def makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=False):
     # create lists of files (and missing file indices) for various file types
     shr, ehr = timerange
     file_list    = { 'wrfout':[], 'diag':[] }
@@ -757,7 +823,9 @@ def makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, debug=False):
         yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
         for mem in range(1,ENS_SIZE+1):
             diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
-            print(diag)
+            if g193:
+                diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag_latlon_g193.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
+            if debug: print(diag)
             if os.path.exists(diag): file_list['diag'].append(diag)
             else: missing_list['diag'].append(missing_index)
             missing_index += 1
@@ -831,15 +899,16 @@ def makeEnsembleListDA(wrfinit, timerange):
                 missing_index += 1
     return (file_list, missing_list)
 
-def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10):
+def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_SIZE=10):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
-    if debug: print(fields)
+    if debug: 
+        print(fields)
     
     datadict = {}
     #file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
     #file_list, missing_list = makeEnsembleListNSC(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListStan(wrfinit, timerange, ENS_SIZE) #construct list of files
-    file_list, missing_list = makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, debug=debug) #construct list of files
+    file_list, missing_list = makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=debug) #construct list of files
     #file_list, missing_list = makeEnsembleListArchive(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListHybrid(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE) #construct list of files
@@ -859,10 +928,10 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         
         # open Multi-file netcdf dataset
         if debug:
-            pdb.set_trace()
+            print("opening xarray mfdataset ", file_list[filename])
 
         fh = xarray.open_mfdataset(file_list[filename],concat_dim='Time')
-        # Dimension has different times and members.
+        # This concatenation dimension includes different times AND members.
         fh = fh.rename({'Time':'TimeMember'})
        
         # loop through each field, wind fields will have two fields that need to be read
@@ -881,6 +950,17 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             #else:               data = fh.variables[array][:,level,:,:]
 
             data = fh.variables[array][:,:]
+            data = data.values # use the numpy array, not the full xarray object.
+            # Many things that come afterward assume a numpy array, like flatten method. 
+            if fh.variables[array].dims[1] == 'nVertices':
+                if debug:
+                    print("field on vertices, like vorticity_500hPa, put on cells")
+                fieldv = data
+                nEdgesOnCell, verticesOnCell = readMPASVertices()
+                # verticesOnCell is the transpose of what mpas_vort_cell1 expects
+                fieldc = mpas_vort_cell.mpas_vort_cell1(nEdgesOnCell, verticesOnCell.T, fieldv)
+                data = fieldc 
+
 
             #data = data.reshape((10,data.shape[1]))
             #data = np.swapaxes(data,0,1) # flip first two axes so time is first
@@ -891,21 +971,26 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             #data = np.swapaxes(data,0,1) # flip first two axes so time is first
             #data = data.reshape((10*((timerange[1]+1)-timerange[0])),data.shape[2],data.shape[3]) #reshape again
 
+            
+
             # change units for certain fields
-            if array in ['U_PL', 'V_PL', 'UBSHR6','VBSHR6','UBSHR1', 'VBSHR1', 'U10','u10','v10','V10', 'U_COMP_STM', 'V_COMP_STM','S_PL','U_COMP_STM_6KM','V_COMP_STM_6KM']:  data = data*1.93 # m/s > kt
-            elif array in ['DEWPOINT_2M', 'T2', 't2m', 'AFWA_WCHILL', 'AFWA_HEATIDX']:   data = (data - 273.15)*1.8 + 32.0 # K > F 
-            elif array in ['PREC_ACC_NC', 'PREC_ACC_C', 'AFWA_PWAT', 'PWAT', 'precipw', 'AFWA_RAIN', 'AFWA_SNOWFALL', 'AFWA_SNOW', 'AFWA_ICE', 'AFWA_FZRA','AFWA_RAIN_HRLY','AFWA_ICE_HRLY','AFWA_SNOWFALL_HRLY', 'AFWA_FZRA_HRLY']:   data = data*0.0393701 # mm > in             
-            elif array in ['RAINNC', 'GRPL_MAX', 'SNOW_ACC_NC', 'AFWA_HAIL', 'HAILCAST_DIAM_MAX']:   data = data*0.0393701 # mm > in 
+            if array in ['u10','v10']:  data = data*1.93 # m/s > kt
+            elif re.compile("^uzonal_\d\d+[A-Za-z]+").match(array):      data = data*1.93 # m/s > kt
+            elif re.compile("^umeridional_\d\d+[A-Za-z]+").match(array): data = data*1.93 # m/s > kt
+            elif re.compile("^[uv]_pv$").match(array):                   data = data*1.93 # m/s > kt
+            elif array in ['dewpoint_surface', 't2m']:             data = (data - 273.15)*1.8 + 32.0 # K > F 
+            elif array in ['precipw']:                             data = data*0.0393701 # mm > in             
+            elif array in ['rainnc', 'grpl_max', 'SNOW_ACC_NC']:   data = data*0.0393701 # mm > in 
             elif array in ['T_PL', 'TD_PL', 'SFC_LI']:             data = data - 273.15 # K > C
-            elif array in ['AFWA_MSLP', 'MSLP', 'mslp']:                   data = data*0.01 # Pa > hPa
-            elif array in ['ECHOTOP']:                             data = data*3.28084# m > ft
-            elif array in ['UP_HELI_MIN']:                             data = np.abs(data)
-            elif array in ['AFWA_VIS', 'VISIBILITY']:                            data = (data*0.001)/1.61  # m > mi
-            elif array in ['SBCINH', 'MLCINH', 'W_DN_MAX', 'sbcin', 'mlcin']:        data = data*-1.0 # make cin positive
+            elif re.compile("^temperature_\d\d+hPa$").match(array):data = data - 273.15 # K > C
+            elif re.compile("^dewpoint_\d\d+hPa$").match(array):   data = data - 273.15 # K > C
+            elif array in ['mslp']:                                data = data*0.01 # Pa > hPa
+            elif array in ['UP_HELI_MIN']:                         data = np.abs(data)
+            elif array in ['w_velocity_min']:                      data = data*-1.0 
             elif array in ['PVORT_320K']:                          data = data*1000000 # multiply by 1e6
-            elif array in ['SBT123_GDS3_NTAT','SBT124_GDS3_NTAT','GOESE_WV','GOESE_IR']: data = data -273.15 # K -> C
-            elif array in ['HAIL_MAXK1', 'HAIL_MAX2D']:            data = data*39.3701 #  m -> inches
-            elif array in ['PBMIN', 'PBMIN_SFC', 'BESTPBMIN', 'MLPBMIN', 'MUPBMIN']:                  data = data*0.01 #  Pa -> hPa
+            elif re.compile("^vorticity_\d\d+hPa").match(array):   data = data * 1e5
+            elif array == "vort_pv":                               data = data * 1e5
+            elif array in ['PBMIN', 'PBMIN_SFC', 'BESTPBMIN', 'MLPBMIN', 'MUPBMIN']:  data = data*0.01 #  Pa -> hPa
 #            elif array in ['LTG1_MAX1', 'LTG2_MAX', 'LTG3_MAX']:   data = data*0.20 #  scale down excess values
             
             datalist.append(data)
@@ -913,7 +998,14 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
         # these are derived fields, we don't have in any of the input files but we can compute
         print(datalist[0].shape)
         if 'name' in fields[f]:
-            if fieldname in ['shr06mag', 'shr01mag', 'bunkmag','speed10m']: datalist = [np.sqrt(datalist[0]**2 + datalist[1]**2)]
+            if fieldname in ['shr06mag', 'shr01mag']:
+                # derive wind shear from top and bottom level
+                # Assume datalist is 4-element list: [bottom_u, bottom_v, top_u, top_v]
+                datalist = [np.sqrt((datalist[0]-datalist[2])**2 + (datalist[1]-datalist[3])**2)]
+            elif fieldname[0:5] == 'speed' or fieldname in ['bunkmag']:
+                # derive speed from u and v components. different than wrf. It already has speed in S_PL array.
+                datalist = [np.sqrt(datalist[0]**2 + datalist[1]**2)]
+            elif fieldname in ['shr06','shr01']: datalist = [datalist[0]-datalist[2], datalist[1]-datalist[3]]
             elif fieldname == 'uhratio': datalist = [compute_uhratio(datalist)]
             elif fieldname == 'stp': datalist = [computestp(datalist)]
             # GSR in fields are T(K), mixing ratio (kg/kg), and surface pressure (Pa)
@@ -923,13 +1015,23 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
             #elif fieldname == 'pbmin': datalist = [ datalist[1] - datalist[0][:,0,:] ]
             elif fieldname == 'pbmin': datalist = [ datalist[1] - datalist[0] ] # CSS changed above line for GRIB2
             elif fieldname in ['thck1000-500', 'thck1000-850'] : datalist = [ datalist[1]*0.1 - datalist[0]*0.1 ] # CSS added for thicknesses
-            elif fieldname == 'winter': datalist = [datalist[1] + datalist[2] + datalist[3]]
-            elif fieldname == 'frzdepth': datalist = [computefrzdepth(datalist)]
 
         datadict[f] = []
         for data in datalist:
-          # perform mean/max/variance/etc to reduce 3D array to 2D
+
+
+          if is_precip_diff(fieldname):
+            if debug:
+                  print("Deriving accumulated precipitation. Subract ensemble at first time from ensemble at last time")
+            for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
+            # last and first time in the requested time range
+            ensemble_at_last_time  = data[-ENS_SIZE:]
+            ensemble_at_first_time = data[:ENS_SIZE]
+            data = ensemble_at_last_time - ensemble_at_first_time
+
+         # perform mean/max/variance/etc to reduce 3D array to 2D
           spatial_dimensions = data.shape[1:] # works for 1D meshes like MPAS and 2D grids like WRF
+          ntimes = int(data.shape[0]/ENS_SIZE)
           if (fieldtype == 'mean'):  data = np.mean(data, axis=0)
           elif (fieldtype == 'pmm'): data = compute_pmm(data)
           elif (fieldtype == 'max'): data = np.amax(data, axis=0)
@@ -937,46 +1039,53 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
           elif (fieldtype == 'var'): data = np.std(data, axis=0)
           elif (fieldtype == 'maxstamp'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
           elif (fieldtype == 'summean'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nansum(data, axis=0)
                 data = np.nanmean(data, axis=0)
           elif (fieldtype == 'maxmean'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
                 data = np.nanmean(data, axis=0)
           elif (fieldtype == 'summax'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nansum(data, axis=0)
                 data = np.nanmax(data, axis=0)
           elif (fieldtype[0:3] == 'mem'):
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
-                print(fieldname)
-                if fieldname in ['precip', 'precipacc']:
-                    print('where we should be')
-                    data = np.nanmax(data, axis=0)
-                else:                      data = np.nanmax(data, axis=0)
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
+                data = np.nanmax(data, axis=0)
                 data = data[member-1,:] 
           elif (fieldtype in ['prob', 'neprob', 'problt', 'probgt', 'neprobgt', 'neproblt']):
                 if fieldtype in ['prob', 'neprob', 'probgt', 'neprobgt']: data = (data>=thresh).astype('float')
                 elif fieldtype in ['problt', 'neproblt']: data = (data<thresh).astype('float')
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                ntimes = int(data.shape[0]/ENS_SIZE)
-                data = np.reshape(data.values, (ntimes,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
-                if fieldtype in ['neprob','neprobgt','neproblt']: data = compute_neprob(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
+                if fieldtype in ['neprob','neprobgt','neproblt']: 
+                    junk = webPlot()
+                    junk.domain = domain# define correct domain so .ibox can be correct
+                    junk.loadMap() 
+                    data2d = junk.latlonGrid(data[0,:])
+                    data3d = np.tile(data2d, (ENS_SIZE,1,1))
+                    for i in range(1,ENS_SIZE):
+                        data2d = junk.latlonGrid(data[i,:])
+                        data3d[i] = data2d
+                    miles_to_km = 1.60934
+                    roi = 25 * miles_to_km / junk.min_grid_spacing_km 
+                    if debug: print("roi",roi)
+                    data = compute_neprob(data3d, roi=int(roi), sigma=float(fields['sigma']), type='gaussian')
                 else: data = np.nanmean(data, axis=0) 
                 data = data+0.001 #hack to ensure that plot displays discrete prob values
           elif (fieldtype in ['prob3d']):
                 data = (data>=thresh).astype('float')
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0)
-                data = np.reshape(data, (data.shape[0]/ENS_SIZE,ENS_SIZE,*spatial_dimensions))
+                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = compute_prob3d(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
           if debug: print('field '+ fieldname+ ' has shape', data.shape, 'max', data.max(), 'min', data.min())
 
@@ -990,6 +1099,15 @@ def readEnsemble(wrfinit, timerange=None, fields=None, debug=False, ENS_SIZE=10)
 
     return (datadict, missing_list)
 
+
+def is_precip_diff(s):
+    # Is this string an accumulated precipitation difference field?
+    # Assume it is if it starts with "precip-", ends with "hr"
+    if s[0:7] == "precip-" and s[-2:] == "hr":
+        return True
+    return False
+
+
 def readGrid(file_dir):
     f = Dataset(file_dir, 'r')
     lats   = f.variables['XLAT'][0,:]
@@ -997,16 +1115,25 @@ def readGrid(file_dir):
     f.close()
     return (lats,lons)
 
+def readMPASVertices(ifile="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
+    # Used for regridding field from vertex to cell. latVertex and lonVertex not needed
+    fh = Dataset(ifile, "r")
+    nEdgesOnCell = fh.variables['nEdgesOnCell'][:]
+    verticesOnCell = fh.variables['verticesOnCell'][:]
+    fh.close()
+    return (nEdgesOnCell, verticesOnCell)
+
 def readGridMPAS():
     fh = Dataset("/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc", "r")
-    lats = fh.variables['latCell'][:]
-    lons = fh.variables['lonCell'][:]
+    latCell = fh.variables['latCell'][:]
+    lonCell = fh.variables['lonCell'][:]
     areaCell = fh.variables['areaCell'][:] # units m^2
-    max_resolution_km = 2. * np.sqrt(areaCell.min()/np.pi/1000/1000)
+    min_grid_spacing_km = 2. * np.sqrt(areaCell.min()/np.pi/1000/1000)
+    # min_grid_spacing_km used for grid spacing of interpolated lat-lon grid.
     fh.close()
-    lats, lons = np.degrees(lats), np.degrees(lons) #convert radians to degrees
-    lons[lons >= 180] = lons[lons >= 180] - 360
-    return (lats, lons, max_resolution_km)
+    latCell, lonCell = np.degrees(latCell), np.degrees(lonCell) #convert radians to degrees
+    lonCell[lonCell >= 180] = lonCell[lonCell >= 180] - 360
+    return (latCell, lonCell, min_grid_spacing_km)
 
 def saveNewMap(domstr='CONUS', wrfout=None):
     # if domstr is not in the dictionary, then use provided wrfout to create new domain
@@ -1032,6 +1159,8 @@ def saveNewMap(domstr='CONUS', wrfout=None):
         ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
         fig_width = domains[domstr]['fig_width']
         lat_1, lat_2, lon_0 = 32.0, 46.0, -101.0
+        if domstr=='NA':
+            lon_0 = -115.0
 
     dpi = 90 
     fig = plt.figure(dpi=dpi)
@@ -1054,14 +1183,43 @@ def saveNewMap(domstr='CONUS', wrfout=None):
     m.drawcoastlines(linewidth=0.5, ax=ax)
     m.drawstates(linewidth=0.25, ax=ax)
     m.drawcountries(ax=ax)
-    m.drawcounties(linewidth=0.1, color='gray', ax=ax)
+    # avoid this error
+    # UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf1 in position 2: invalid continuation byte
+    #m.drawcounties(linewidth=0.1, color='gray', ax=ax)
 
-    pickle.dump((fig,ax,m), open('rt2015_%s.pk'%domstr, 'wb'))
+
+    # load lat/lons
+    lats, lons, min_grid_spacing_km = readGridMPAS()
+    delta_deg = min_grid_spacing_km / 111
+    if m.lonmin > 180 or m.lonmax > 180:
+        lons[lons<0] = lons[lons<0] + 360.  # change -180-0 to 180-360 to match m.lonmin and m.lonmax
+    # Replace m.lonmax with ur_lon? Otherwise, risk getting +179.999 when NW corner crosses the datetime
+    nlon = int((m.lonmax - m.lonmin)/delta_deg)
+    nlat = int((m.latmax - m.latmin)/delta_deg)
+    if nlon > 1500:
+        nlon = 1500
+    if nlat > 1500:
+        nlat = 1500
+    lon2d, lat2d = np.meshgrid(np.linspace(m.lonmin, m.lonmax, nlon), np.linspace(m.latmin,m.latmax,nlat))
+    # Convert to map coordinates instead of latlon to avoid the need to specify latlon=True in contour and barb methods.
+    x2d, y2d = m(lon2d,lat2d)
+    # ibox: subscripts within lat/lon box # only used to speed up 1-D array triangulation and plotting
+    ibox = (m.lonmin-1 <= lons ) & (lons < m.lonmax+1) & (m.latmin-1 <= lats) & (lats < m.latmax+1)
+    lons = lons[ibox]
+    lats = lats[ibox]
+    x, y = m(lons,lats)
+
+    # use .filled() to avoid error about masked arrays
+    vtx, wts = interp_weights(np.vstack((lons.filled(),lats.filled())).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
+
+    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open('/glade/work/ahijevyc/share/rt_ensemble/python_scripts/rt2015_%s.pk'%domstr, 'wb'))
 
 def drawOverlay(domstr='CONUS'):
     ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
     fig_width = domains[domstr]['fig_width']
     lat_1, lat_2, lon_0 = 32.0, 46.0, -101.0
+    if domstr=='NA':
+        lon_0 = -115.0
     dpi = 90
 
     fig = plt.figure(dpi=dpi)
@@ -1087,20 +1245,23 @@ def drawOverlay(domstr='CONUS'):
     plt.savefig('overlay_counties_%s.png'%domstr, dpi=90, transparent=True)
 
 def compute_pmm(ensemble):
-    mem = ensemble.shape[0]
+    members = ensemble.shape[0]
     spatial_dimensions = ensemble.shape[1:]
     ens_mean = np.mean(ensemble, axis=0)
-    ens_dist = np.sort(ensemble.values.flatten())[::-1]
-    pmm = ens_dist[::mem]
+    ens_dist = np.sort(ensemble.flatten())[::-1]
+    pmm = ens_dist[::members]
 
-    ens_mean_index = np.argsort(ens_mean.values.flatten())[::-1]
+    ens_mean_index = np.argsort(ens_mean.flatten())[::-1]
     temp = np.empty_like(pmm)
     temp[ens_mean_index] = pmm
 
-    temp = np.where(ens_mean.values.flatten() > 0, temp, 0.0)
+    temp = np.where(ens_mean.flatten() > 0, temp, 0.0)
     return temp.reshape(spatial_dimensions)
 
 def compute_neprob(ensemble, roi=0, sigma=0.0, type='gaussian'):
+    if len(ensemble.shape) < 3:
+        print('compute_neprob: needs ensemble of 2D arrays, not 1D arrays')
+        sys.exit(1)
     y,x = np.ogrid[-roi:roi+1, -roi:roi+1]
     kernel = x**2 + y**2 <= roi**2
     ens_roi = ndimage.filters.maximum_filter(ensemble, footprint=kernel[np.newaxis,:])
@@ -1138,7 +1299,9 @@ def computestp(data):
 
     srh_term = (data[2]/150.0)
 
-    shear06 = np.sqrt(data[3]**2 + data[4]**2) #this will be in knots (converted prior to fn)
+    ushear06 = data[3]-data[5]
+    vshear06 = data[4]-data[6]
+    shear06 = np.sqrt(ushear06**2 + vshear06**2) #this will be in knots (converted prior to fn)
     shear_term = (shear06/38.87)
     shear_term = np.where(shear06 > 58.32, 1.5, shear_term)
     shear_term = np.where(shear06 < 24.3, 0.0, shear_term)
@@ -1195,6 +1358,18 @@ def compute_rh(data):
     qsat = 0.622 * es / (psfc - es)
     rh = q2 / qsat
     return 100*rh
+
+# from https://stackoverflow.com/questions/20915502/speedup-scipy-griddata-for-multiple-interpolations-between-two-irregular-grids
+def interp_weights(xyz, uvw):
+    tri = qhull.Delaunay(xyz)
+    simplex = tri.find_simplex(uvw)
+    vertices = np.take(tri.simplices, simplex, axis=0)
+    temp = np.take(tri.transform, simplex, axis=0)
+    d = xyz.shape[1]
+    delta = uvw - temp[:, d]
+    bary = np.einsum('njk,nk->nj', temp[:, :d, :], delta)
+    return vertices, np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
+
 
 def showKeys():
     print(list(fieldinfo.keys()))
