@@ -66,7 +66,12 @@ def origmesh(df, initfile, diagdir, debug=False):
         # Extract vmax, RMW, minp, and radii of wind thresholds
         raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = atcf.derived_winds(u10, v10, mslp, lonCell, latCell, row, debug=debug)
 
+        # TODO: figure out how to replace the row with (possibly) multiple rows with different wind radii
+        # without passing df, the entire DataFrame
         df = atcf.update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=debug)
+    if debug:
+        print("mpas.origmesh() pausing before return")
+        pdb.set_trace()
     return df, initfile
 
 
