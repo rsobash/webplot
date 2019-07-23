@@ -2,7 +2,7 @@ def readcm(name):
     '''Read colormap from file formatted as 0-1 RGB CSV'''
     rgb = []
     fh = open(name, 'r')
-    for line in fh.read().splitlines(): rgb.append(map(float,line.split()))
+    for line in fh.read().splitlines(): rgb.append(list(map(float,line.split())))
     return rgb
 
 def readNCLcm(name):
@@ -16,7 +16,7 @@ def readNCLcm(name):
     else: fh = open('%s/%s.rgb'%(rgb_dir_ch,name), 'r')
 
     for line in fh.read().splitlines():
-        if appending: rgb.append(map(float,line.split()))
+        if appending: rgb.append(list(map(float,line.split())))
         if ''.join(line.split()) in ['#rgb',';RGB']: appending = True
     maxrgb = max([ x for y in rgb for x in y ])
     if maxrgb > 1: rgb = [ [ x/255.0 for x in a ] for a in rgb ]
