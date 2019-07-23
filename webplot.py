@@ -590,9 +590,9 @@ def saveNewMap(domstr='CONUS', wrfout=None):
     m.drawcoastlines(linewidth=0.5, ax=ax)
     m.drawstates(linewidth=0.25, ax=ax)
     m.drawcountries(ax=ax)
-    #m.drawcounties(linewidth=0.1, ax=ax)
+    m.drawcounties(linewidth=0.1, ax=ax)
 
-    pickle.dump((fig,ax,m), open('rt2015_%s.pk'%domstr, 'w'))
+    pickle.dump((fig,ax,m), open('rt2015_%s.pk'%domstr, 'wb'))
 
 def compute_pmm(ensemble):
     mem, dy, dx = ensemble.shape
