@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 from subprocess import call # to use "mogrify"
 import datetime as dt
-def mysavfig(ofile, string="", timestamp=True, size=5, **kwargs):
+def mysavfig(ofile, string="", timestamp=True, size=5, debug=False, **kwargs):
+    if debug:
+        print('mysavfig: timestamp=',timestamp)
     if timestamp:
         string = string + '\n' + 'created '+str(dt.datetime.now(tz=None)).split('.')[0] # + '\n' # extra newline to keep timestamp onscreen.
     th = plt.annotate(string, xy=(2,1), xycoords='figure pixels', horizontalalignment='left', verticalalignment='bottom', size=size)
