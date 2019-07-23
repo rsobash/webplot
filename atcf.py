@@ -50,7 +50,7 @@ def getcy(cys):
 
 def read(ifile = ifile, debug=False, fullcircle=False):
     # Read data into Pandas Dataframe
-    print('reading', ifile, 'fullcircle=', fullcircle)
+    print('Reading', ifile, 'fullcircle=', fullcircle)
     names = list(atcfcolumns) # make a copy of list, not a copy of the reference to the list.
     converters={
             # The problem with CY is ATCF only reserves 2 characters for it.
@@ -110,8 +110,8 @@ def read(ifile = ifile, debug=False, fullcircle=False):
     testline = next(reader)
     num_cols = len(testline)
     if debug:
+        print("test line num_cols:", num_cols)
         print(testline)
-        print('num_cols=',num_cols)
     del reader
 
     # Output from HWRF vortex tracker, fort.64 and fort.66
@@ -135,7 +135,7 @@ def read(ifile = ifile, debug=False, fullcircle=False):
 
     # fort.66 has track id in the 3rd column.
     if num_cols == 31:
-        print('assume fort.66-style with 31 columns in', ifile)
+        print('Assuming fort.66-style with 31 columns in', ifile)
         # There is a cyclogenesis ID column for fort.66
         if debug:
             print('inserted ID for cyclogenesis in column 2')
@@ -234,9 +234,6 @@ def read(ifile = ifile, debug=False, fullcircle=False):
             if col in ['initials', 'depth']:
                 df[col] = 'X'
             
-
-    if debug:
-        pdb.set_trace()
     if fullcircle:
         if debug:
             print("full circle wind radii")
@@ -250,6 +247,7 @@ def read(ifile = ifile, debug=False, fullcircle=False):
 
 
     # Tried converting to MultiIndex DataFrame but it led to all sorts of problems.
+    # TODO: try append=True to avoid losing columns when you make them an index
 
     return df
 
@@ -263,12 +261,12 @@ def x2s(x):
 
 def lat2s(lat):
     NS = 'N' if lat >= 0 else 'S'
-    lat = x2s(lat) + NS + ','
+    lat = x2s(lat) + NS
     return lat
 
 def lon2s(lon):
     EW = 'E' if lon >= 0 else 'W'
-    lon = '%4s' % x2s(lon) + EW + ','
+    lon = x2s(lon) + EW
     return lon
 
 # function to compute great circle distance between point lat1 and lon1 and arrays of points 
@@ -282,7 +280,7 @@ def dist_bearing(lon1,lons,lat1,lats):
     lat1 = np.radians(lat1)
     lats = np.radians(lats)
     # great circle distance. 
-    arg = np.sin(lat1)*np.sin(lats)+np.cos(lat1)*np.cos(lats)*np.cos(lon1-lons) 
+    arg = np.sin(lat1)*np.sin(lats)+np.cos(lat1)*np.cos(lats)*np.cos(lon1-lons)
     #arg = np.where(np.fabs(arg) < 1., arg, 0.999999) 
 
     dlon = lons-lon1
@@ -299,24 +297,38 @@ def dist_bearing(lon1,lons,lat1,lats):
     return np.arccos(arg)* a, bearing 
 
 
-
-ms2kts = 1.94384
-km2nm = 0.539957
+ms2kts = pint.UnitRegistry()["m/s"].to("knots").magnitude # 1.94384
+km2nm  = pint.UnitRegistry()["km"].to("nautical_mile").magnitude # 0.539957
 
 quads = {'NE':0, 'SE':90, 'SW':180, 'NW':270}
 thresh_kts = np.array([34, 50, 64])
 
+def get_azimuthal_mean(x, distance_km, binsize_km = 25.):
+    radius = np.arange(0, max(distance_km), binsize_km)
+    x_vs_radius = [] # maybe should be numpy array but can't remember syntax
+    for r in radius:
+        i = (r <= distance_km) & (distance_km < r+binsize_km)
+        npts = np.sum(i)
+        if npts == 0:
+            print("get_azimuthal_mean: no pts b/t", r, "and", r+binsize_km)
+            sys.exit(1)
+        if npts == 1:
+            print("get_azimuthal_mean: only " + "%d" % npts + " grid cell b/t", r, "and", r+binsize_km)
+        x_vs_radius.append(np.mean(x[i]))
+    return x_vs_radius, radius
 
-
-def get_max_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, quads=quads, thresh_kts=thresh_kts, debug=False):
+def get_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, quads=quads, thresh_kts=thresh_kts, 
+        rad_search_radius_nm=300., lonCell=None, latCell=None, debug=False, wind_radii_method='max'):
+    
     # speed_kts is converted to masked array. Masked where distance >= 300 nm
-    rad_nm = {}
+    rad_nm = {"wind_radii_method":wind_radii_method}
     # Put in dictionary "rad_nm" where rad_nm = {
     #                                       34: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4},
     #                                       50: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4},
     #                                       64: {'NE':rad1, 'SE':rad2, 'SW':rad3, 'NW':rad4} 
     #                                     }
 
+    rad_search_radius_km = rad_search_radius_nm / km2nm
 
     rad_nm['raw_vmax_kts'] = raw_vmax_kts
     rad_nm['thresh_kts'] = thresh_kts
@@ -326,29 +338,69 @@ def get_max_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, quads=qua
     # This was to deal with Irma and the unrelated 34 knot onshore flow in Georgia
     # Looking at HURDAT2 R34 sizes (since 2004), ex-tropical storm Karen 2015 had 710nm.
     # Removing EX storms, the max was 480 nm in Hurricane Sandy 2012
-    speed_kts = np.ma.array(speed_kts, mask = distance_km >= 300./km2nm)
+    speed_kts = np.ma.array(speed_kts, mask = distance_km >= rad_search_radius_km)
 
     for wind_thresh_kts in thresh_kts[thresh_kts < raw_vmax_kts]:
-        ithresh = speed_kts >= wind_thresh_kts
-        # warn if max_dist_of_wind_threshold is on edge of domain
-        imax = np.argmax(distance_km * ithresh)
+        ithresh = speed_kts >= wind_thresh_kts # Boolean array same shape
+        imax = np.argmax(distance_km * ithresh) # arg must be same shape as subscript target
         iedge = np.unravel_index(imax, distance_km.shape)
-        if iedge[0] == distance_km.shape[0]-1 or iedge[1] == distance_km.shape[1]-1 or any(iedge) == 0:
-            print("get_max_ext_of_wind(): R"+str(wind_thresh_kts)+" at edge of domain",iedge,"shape:",distance_km.shape)
+        # warn if max_dist_of_wind_threshold is on edge of 2-d domain (like nested WRF grid)
+        if distance_km.ndim == 2:
+            if debug:
+                print("imax:", imax)
+                print("iedge:", iedge)
+            if iedge[0] == distance_km.shape[0]-1 or iedge[1] == distance_km.shape[1]-1 or any(iedge) == 0:
+                print("get_ext_of_wind(): R"+str(wind_thresh_kts)+" at edge of domain",iedge,"shape:",distance_km.shape)
         rad_nm[wind_thresh_kts] = {}
+        if debug:
+            print('get_ext_of_wind(): method ' + wind_radii_method)
+            print('get_ext_of_wind(): kts quad azimuth npts    dist   bearing     lat     lon')
         for quad,az in quads.items():
-            iquad = (az <= bearing) & (bearing < az+90) & (speed_kts >= wind_thresh_kts)
-            rad_nm[wind_thresh_kts][quad] = 0
-            if np.sum(iquad) > 0:
-                max_dist_of_wind_threshold = np.max(distance_km[iquad]) * km2nm
-                imax_dist_of_wind_threshold = np.argmax(distance_km[iquad])
-                if debug:
-                    print('get_max_ext_of_wind():', wind_thresh_kts, quad, '%3d-%3d'%(az,az+90), '%4d'%np.sum(iquad), '%10.6f'%max_dist_of_wind_threshold, '%10.6f'%bearing[iquad][imax_dist_of_wind_threshold])
-                rad_nm[wind_thresh_kts][quad] = max_dist_of_wind_threshold
+            # Compute azimuthal mean
+            if wind_radii_method == "azimuthal_mean":
+                # I thought I wouldn't need (distance_km < rad_search_radius_km) because speed_kts was masked beyond
+                # the search radius. But it makes a difference.
+                iquad = (az <= bearing) & (bearing < az+90) & (distance_km < rad_search_radius_km)
+                speed_kts_vs_radius_km, radius_km = get_azimuthal_mean(speed_kts[iquad], distance_km[iquad], binsize_km = 25.)
+                rad_nm[wind_thresh_kts][quad] = 0.
+                if any(speed_kts_vs_radius_km >= wind_thresh_kts):
+                    max_dist_of_wind_threshold_nm = np.max(radius_km[speed_kts_vs_radius_km >= wind_thresh_kts]) * km2nm
+                    rad_nm[wind_thresh_kts][quad] = max_dist_of_wind_threshold_nm
+                    if debug:
+                        print('get_ext_of_wind():', "%3d "%wind_thresh_kts, quad, ' %3d-%3d'%(az,az+90), '%4d'%np.sum(iquad), 
+                              '%6.2fnm'%max_dist_of_wind_threshold_nm, end="")
+                        print(radius_km)
+                        print(speed_kts_vs_radius_km)
+                        print()
+            else:
+                # I thought I wouldn't need (distance_km < rad_search_radius_km) because speed_kts was masked beyond
+                # the search radius. But it makes a difference.
+                iquad = (az <= bearing) & (bearing < az+90) & (speed_kts >= wind_thresh_kts) & (distance_km < rad_search_radius_km)
+                rad_nm[wind_thresh_kts][quad] = 0.
+                if np.sum(iquad) > 0:
+                    x_km = distance_km[iquad]
+                    if wind_radii_method[-10:] == "percentile":
+                        # assume wind_radii_method is a number followed by the string "percentile".
+                        distance_percentile = float(wind_radii_method[:-10])
+                        # index of array entry nearest to percentile value
+                        idist_of_wind_threshold=abs(x_km-np.percentile(x_km,distance_percentile,interpolation='nearest')).argmin()
+                        rad_nm[wind_thresh_kts][quad] = np.percentile(x_km, distance_percentile) * km2nm
+                    elif wind_radii_method == "max":
+                        idist_of_wind_threshold = np.argmax(x_km)
+                        rad_nm[wind_thresh_kts][quad] = np.max(x_km) * km2nm
+                    else:
+                        print("unexpected wind_radii_method:" + wind_radii_method)
+                        sys.exit(1)
+                    if debug:
+                        print('get_ext_of_wind():', "%3d "%wind_thresh_kts, quad, ' %3d-%3d'%(az,az+90), '%4d'%np.sum(iquad), 
+                              '%6.2fnm'%rad_nm[wind_thresh_kts][quad], '%4.0fdeg'%bearing[iquad][idist_of_wind_threshold], end="")
+                        if lonCell is not None:
+                            print('%8.2fN'%latCell[iquad][idist_of_wind_threshold], '%7.2fE'%lonCell[iquad][idist_of_wind_threshold], end="")
+                        print()
     return rad_nm
 
 
-def derived_winds(u10, v10, mslp, lonCell, latCell, row, vmax_search_radius=250., mslp_search_radius=100., debug=False):
+def derived_winds(u10, v10, mslp, lonCell, latCell, row, vmax_search_radius=250., mslp_search_radius=100., wind_radii_method="max", debug=False):
 
     # Given a row (with row.lon and row.lat)...
 
@@ -398,7 +450,7 @@ def derived_winds(u10, v10, mslp, lonCell, latCell, row, vmax_search_radius=250.
     raw_minp = mslp[mslprad].min() / 100.
 
     # Get max extent of wind at thresh_kts thresholds.
-    rad_nm = get_max_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, debug=debug)
+    rad_nm = get_ext_of_wind(speed_kts, distance_km, bearing, raw_vmax_kts, latCell=latCell, lonCell=lonCell, wind_radii_method=wind_radii_method, debug=debug)
 
     return raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm
 
@@ -415,6 +467,10 @@ def add_wind_rad_lines(row, rad_nm, fullcircle=False, debug=False):
     for thresh in thresh_kts[thresh_kts < raw_vmax_kts]:
         if any(rad_nm[thresh].values()):
             newrow = row.copy()
+            # not sure how to do this with "rad" as part of the DataFrame index or Series name
+            if row.fhr > 110:
+                pdb.set_trace()
+            newrow.rename({34:thresh}, inplace=True)
             newrow.rad = thresh
             if fullcircle:
                 # Append row with full circle 34, 50, or 64 knot radius
@@ -435,9 +491,39 @@ def add_wind_rad_lines(row, rad_nm, fullcircle=False, debug=False):
     
     return lines
 
+def update_row(row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=False):
 
-def update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=False):
+    # TODO Call with origgridWRF, origgrid, and mpas.origmesh 
 
+    if debug:
+        print("atcf.update_row: before update\n", row[['valid_time','lon','lat', 'vmax', 'minp', 'rmw']]) 
+    row["vmax"] = raw_vmax_kts
+    row["minp"] = raw_minp
+    row["rmw"]  = raw_RMW_nm
+    # Add note of original mesh = True in user data (not defined) column
+    if 'origmeshTrue' not in row.userdata:
+        moreuserdata = 'origmeshTrue wind_radii_method '+ rad_nm["wind_radii_method"]
+        if debug:
+            print("appending "+moreuserdata+" to row.userdata")
+        row.userdata += moreuserdata
+    if debug:
+        print('after', row[['vmax', 'minp', 'rmw']]) 
+
+    # Return row if vmax < 34 kts
+    if rad_nm['raw_vmax_kts'] < 34:
+        return row
+
+    # Make 34/50/64 knot rows
+    newrows = add_wind_rad_lines(row, rad_nm, debug=debug)
+    if debug:
+        print("changed", row, " to ", newrows)
+    return newrows
+
+
+
+def update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, gridfile=None, debug=False):
+
+    # TODO: Use update_row instead. add gridfile to update_row
     # Called by origgrid and origmesh
 
     if debug:
@@ -447,12 +533,17 @@ def update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=False):
     row["rmw"]  = raw_RMW_nm
     # Add note of original mesh = True in user data (not defined) column
     if 'origmeshTrue' not in row.userdata:
+        moreuserdata = 'origmeshTrue wind_radii_method '+ rad_nm["wind_radii_method"]
+        if gridfile is not None:
+            # Append origmesh file to userdata column (after a comma)
+            moreuserdata += ', ' + gridfile
         if debug:
-            print(row, " is already from original mesh.")
-        row.userdata += 'origmeshTrue'
+            print("appending "+moreuserdata+" to row.userdata")
+        row.userdata += moreuserdata
     if debug:
         print('after', row[['vmax', 'minp', 'rmw']]) 
 
+    # hacky - can probably be cleaner. why the [0]? avoid (1, 44) with (44,) setting mismatch error
     df.loc[row.name,:] = row
 
     # Append 34/50/64 knot lines to DataFrame
@@ -464,7 +555,10 @@ def update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=False):
         df.drop(row.name, inplace=True)
         if debug:
             print("appending ", newlines)
-        df = df.append(newlines, sort=False)
+        df = df.append(newlines, sort=False) 
+    # Sort DataFrame by index (deal with appended wind radii lines)
+    # sort by rad too. I tried to avoid this, but when rad=0, it would be left behind other fhrs that had rad>0.
+    df = df.sort_index().sort_values(['initial_time','fhr','rad'])
 
     return df
 
@@ -480,94 +574,145 @@ def write(ofile, df, fullcircle=False, debug=False):
     # TODO: deal with fullcircle.
     print("writing", ofile)
 
-    # Valid time is not part of ATCF file.
-    del(df["valid_time"])
-
     if debug:
         pdb.set_trace()
-    # Had to add parentheses () to .len to not get error about instancemethod not being iterable.
-    if max(df.cy.str.len()) > 2:
-        print('cy more than 2 characters. Truncating...')
-        # Append full CY to userdata column (after a comma)
-        df['userdata'] = df['userdata'] + ', ' + df['cy']
-        # Keep first 2 characters
-        df['cy'] = df['cy'].str.slice(0,2)
-    formatters={
-            "basin": '{},'.format,
-            # The problem with CY is ATCF only reserves 2 characters for it.
-            "cy": lambda x: x.zfill(2)+"," , # not always an integer (e.g. 10E) # 20181116 force to be integer
-            # Convert initial_time from datetime to string.
-            "initial_time":lambda x: x.strftime('%Y%m%d%H,'),
-            "technum":'{},'.format,
-            "model":'{},'.format,
-            "fhr":'{:3.0f},'.format,
-            "lat":lat2s, 
-            "lon":lon2s, 
-            "vmax":'{:3.0f},'.format,
-            "minp":'{:4.0f},'.format,
-            "ty":'{},'.format,
-            "windcode":'{:>3s},'.format,
-            "rad":'{:3.0f},'.format,
-            "rad1":'{:4.0f},'.format,
-            "rad2":'{:4.0f},'.format,
-            "rad3":'{:4.0f},'.format,
-            "rad4":'{:4.0f},'.format,
-            "pouter":'{:4.0f},'.format,
-            "router":'{:4.0f},'.format,
-            "rmw":'{:3.0f},'.format,
-            "gusts":'{:3.0f},'.format,
-            "eye":'{:3.0f},'.format,
-            "subregion":'{:>2s},'.format,
-            "maxseas":'{:3.0f},'.format,
-            "initials":'{:>3s},'.format,
-            "dir":'{:3.0f},'.format,
-            "speed":'{:3.0f},'.format,
-            "stormname":'{:>9s},'.format,
-            "depth":'{:>1s},'.format,
-            "seas":'{:2.0f},'.format,
-            "seascode":'{:>3s},'.format,
-            "seas1":'{:4.0f},'.format,
-            "seas2":'{:4.0f},'.format,
-            "seas3":'{:4.0f},'.format,
-            "seas4":'{:4.0f},'.format,
-            "userdefined":'{:>18s},'.format,
-            "cpsB":'{:4.0f},'.format,
-            "cpsll":'{:4.0f},'.format,
-            "cpsul":'{:4.0f},'.format,
-            "warmcore":'{},'.format,
-            "direction":'{},'.format,
-            }
-    junk = df.to_string(header=False, index=False, na_rep=' ', columns=atcfcolumns, formatters=formatters)
+    atcf_lines = ""
+    for index, row in df.iterrows():
+        atcf_lines += "{:2s}, ".format(row.basin) 
+        atcf_lines += "{:2s}, ".format(row.cy.zfill(2))
+        atcf_lines += "{:8s}, ".format(row.initial_time.strftime('%Y%m%d%H'))
+        atcf_lines += "{}, ".format(row.technum) 
+        atcf_lines += "{}, ".format(row.model)
+        atcf_lines += "{:3.0f}, ".format(row.fhr)
+        atcf_lines += "{:>4s}, ".format(lat2s(row.lat))
+        atcf_lines += "{:>5s}, ".format(lon2s(row.lon))
+        atcf_lines += "{:3.0f}, ".format(row.vmax)
+        atcf_lines += "{:4.0f}, ".format(row.minp)
+        atcf_lines += "{}, ".format(row.ty)
+        atcf_lines += "{:3.0f}, ".format(row.rad)
+        atcf_lines += "{:>3s}, ".format(row.windcode)
+        atcf_lines += "{:4.0f}, ".format(row.rad1)
+        atcf_lines += "{:4.0f}, ".format(row.rad2)
+        atcf_lines += "{:4.0f}, ".format(row.rad3)
+        atcf_lines += "{:4.0f}, ".format(row.rad4)
+        atcf_lines += "{:4.0f}, ".format(row.pouter)
+        atcf_lines += "{:4.0f}, ".format(row.router)
+        atcf_lines += "{:3.0f}, ".format(row.rmw)
+        atcf_lines += "{:3.0f}, ".format(row.gusts)
+        atcf_lines += "{:3.0f}, ".format(row.eye)
+        atcf_lines += "{:>3s}, ".format(row.subregion) # supposedly 1 character, but always 3 in official b-decks
+        atcf_lines += "{:3.0f}, ".format(row.maxseas)
+        atcf_lines += "{:>3s}, ".format(row.initials)
+        atcf_lines += "{:3.0f}, ".format(row.dir)
+        atcf_lines += "{:3.0f}, ".format(row.speed)
+        atcf_lines += "{:>10s}, ".format(row.stormname)
+        atcf_lines += "{:>1s}, ".format(row.depth)
+        atcf_lines += "{:2.0f}, ".format(row.seas)
+        atcf_lines += "{:>3s}, ".format(row.seascode)
+        atcf_lines += "{:4.0f}, ".format(row.seas1)
+        atcf_lines += "{:4.0f}, ".format(row.seas2)
+        atcf_lines += "{:4.0f}, ".format(row.seas3)
+        atcf_lines += "{:4.0f}, ".format(row.seas4)
+        atcf_lines += "{:>20s}, ".format(row.userdefined) # Described as 20 chars in atcf doc. 
+        atcf_lines += "{}, ".format(row.userdata)
+        atcf_lines += "\n"
 
-    # TODO: FIX IDL-STYLE COLUMNS. STORMNAME IS MISSING A LETTER
-    
-    # na_rep=' ' has no effect
-    # strings have extra space in front of them
-    junk = junk.split('\n')
-    # replace first 3 occurrences of ',  ' with ', '.
-    # replace ',  XX,' with ', XX,'
-    # replace 'nan' with '   '
-    junk = [j.replace(',  ', ', ', 3).replace(',  XX,',', XX,').replace('nan','   ') for j in junk]
-    #delete space before windcode (e.g. NEQ)
-    junk = [j[:68]+j[69:] for j in junk]
-    #delete space before initials
-    junk = [j[:133]+j[134:] for j in junk]
-    #delete space before depth
-    junk = [j[:161]+j[162:] for j in junk]
-    #delete space before seascode
-    junk = [j[:168]+j[169:] for j in junk]
-    junk = '\n'.join(junk)
+    atcf_lines = atcf_lines.replace("nan","   ")
+
+    if False:
+
+        # I couldn't get this section to work. 
+        # The pandas to_string method inexplicibly padded some columns with an extra space that had to be removed later.
+
+        # Valid time is not part of ATCF file.
+        del(df["valid_time"])
+
+        # Had to add parentheses () to .len to not get error about instancemethod not being iterable.
+        if max(df.cy.str.len()) > 2:
+            print('cy more than 2 characters. Truncating...')
+            # Append full CY to userdata column (after a comma)
+            df['userdata'] = df['userdata'] + ', ' + df['cy']
+            # Keep first 2 characters
+            df['cy'] = df['cy'].str.slice(0,2)
+        formatters={
+                "basin": '{},'.format,
+                # The problem with CY is ATCF only reserves 2 characters for it.
+                "cy": lambda x: x.zfill(2)+"," , # not always an integer (e.g. 10E) # 20181116 force to be integer
+                # Convert initial_time from datetime to string.
+                "initial_time":lambda x: x.strftime('%Y%m%d%H,'),
+                "technum":'{},'.format,
+                "model":'{},'.format,
+                "fhr":'{:3.0f},'.format,
+                "lat":lat2s, 
+                "lon":lon2s, 
+                "vmax":'{:3.0f},'.format,
+                "minp":'{:4.0f},'.format,
+                "ty":'{},'.format,
+                "windcode":'{:>3s},'.format,
+                "rad":'{:3.0f},'.format,
+                "rad1":'{:4.0f},'.format,
+                "rad2":'{:4.0f},'.format,
+                "rad3":'{:4.0f},'.format,
+                "rad4":'{:4.0f},'.format,
+                "pouter":'{:4.0f},'.format,
+                "router":'{:4.0f},'.format,
+                "rmw":'{:3.0f},'.format,
+                "gusts":'{:3.0f},'.format,
+                "eye":'{:3.0f},'.format,
+                "subregion":'{:>2s},'.format,
+                "maxseas":'{:3.0f},'.format,
+                "initials":'{:>3s},'.format,
+                "dir":'{:3.0f},'.format,
+                "speed":'{:3.0f},'.format,
+                "stormname":'{:>9s},'.format,
+                "depth":'{:>1s},'.format,
+                "seas":'{:2.0f},'.format,
+                "seascode":'{:>3s},'.format,
+                "seas1":'{:4.0f},'.format,
+                "seas2":'{:4.0f},'.format,
+                "seas3":'{:4.0f},'.format,
+                "seas4":'{:4.0f},'.format,
+                "userdefined":'{:>18s},'.format,
+                "userdata":'{},'.format,
+                "cpsB":'{:4.0f},'.format,
+                "cpsll":'{:4.0f},'.format,
+                "cpsul":'{:4.0f},'.format,
+                "warmcore":'{},'.format,
+                "direction":'{},'.format,
+                }
+        junk = df.to_string(header=False, index=False, na_rep=' ', formatters=formatters, columns=atcfcolumns)
+
+
+
+        # TODO: FIX IDL-STYLE COLUMNS. STORMNAME IS MISSING A LETTER
+        
+        # na_rep=' ' has no effect
+        # strings have extra space in front of them
+        junk = junk.split('\n')
+        # replace first 3 occurrences of ',  ' with ', '.
+        # replace ',  XX,' with ', XX,'
+        # replace 'nan' with '   '
+        junk = [j.replace(',  ', ', ', 3).replace(',  XX,',', XX,').replace('nan','   ') for j in junk]
+        #delete space before windcode (e.g. NEQ)
+        junk = [j[:68]+j[69:] for j in junk]
+        #delete space before initials
+        junk = [j[:133]+j[134:] for j in junk]
+        #delete space before depth
+        junk = [j[:161]+j[162:] for j in junk]
+        #delete space before seascode
+        junk = [j[:168]+j[169:] for j in junk]
+        junk = '\n'.join(junk)
     
     if debug:
         pdb.set_trace()
 
     f = open(ofile, "w")
-    f.write(junk+"\n")
+    f.write(atcf_lines)
 
     f.close()
     print("wrote", ofile)
 
-def origgridWRF(df, griddir, grid="d03", debug=False):
+def origgridWRF(df, griddir, grid="d03", wind_radii_method = "max", debug=False):
     # Get vmax, minp, radius of max wind, max radii of wind thresholds from WRF by Alex Kowaleski
     
     WRFmember = df.model.str.extract(r'WF(\d\d)', flags=re.IGNORECASE)
@@ -601,7 +746,7 @@ def origgridWRF(df, griddir, grid="d03", debug=False):
 
         if debug:
             print("Extract vmax, RMW, minp, and radii of wind thresholds from row", row.name)
-        raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = derived_winds(u10, v10, mslp, lonCell, latCell, row, debug=debug)
+        raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = derived_winds(u10, v10, mslp, lonCell, latCell, row, wind_radii_method=wind_radii_method, debug=debug)
         df = update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=debug)
 
     # Sort DataFrame by index (deal with appended wind radii lines)
@@ -609,15 +754,28 @@ def origgridWRF(df, griddir, grid="d03", debug=False):
     df = df.sort_index().sort_values(['initial_time','fhr','rad'])
     return df
 
+def get_var_with_str(nc, s):
+    matching_vars = [v for v in nc.variables if s.lower() in v.lower()] # .lower() makes it case-insensitive
+    if len(matching_vars) != 1:
+        print("number of matching variables not 1")
+        print(nc.variables, s, matching_vars)
+        sys.exit(1)
+    return matching_vars[0]
 
 
-def origgrid(df, griddir, debug=False):
+def origgrid(df, griddir, ensemble_prefix="ens_", wind_radii_method="max", debug=False):
     # Get vmax, minp, radius of max wind, max radii of wind thresholds from ECMWF grid, not from tracker.
     # Assumes
     #   ECMWF data came from TIGGE and were converted from GRIB to netCDF with ncl_convert2nc.
     #   4-character model string in ATCF file is "EExx" (where xx is the 2-digit ensemble member).
     #   ECMWF ensemble member in directory named "ens_xx" (where xx is the 2-digit ensemble member). 
     #   File path is "ens_xx/${gs}yyyymmddhh.xx.nc", where ${gs} is the grid spacing (0p15, 0p25, or 0p5).
+    # ensemble_prefix may be a single string or a list of strings
+
+    if isinstance(ensemble_prefix, str):
+        ensemble_prefixes = [ensemble_prefix]
+    elif isinstance(ensemble_prefix, (list, tuple)):
+        ensemble_prefixes = ensemble_prefix
 
     # TODO: Why group rows by initial_time and model? Why not process each row independently?
     for run_id, group in df.groupby(['initial_time', 'model']):
@@ -629,22 +787,29 @@ def origgrid(df, griddir, debug=False):
                 print('no original grid for',model,'- skipping')
             continue
         ens = int(m.group(1)) # strip leading zero
-        if ens < 1:
-            continue
+
+        # used to skip EE00 because I didn't know how to handle control run. Now it is handled.
+        #if ens < 1:
+        #    continue
+
         # Allow some naming conventions
         # ens_n/yyyymmddhh.n.nc
         # ens_n/0p15yyyymmddhh_sfc.nc
         # ens_n/0p25yyyymmddhh_sfc.nc
         # ens_n/0p5yyyymmddhh_sfc.nc
         yyyymmddhh = initial_time.strftime('%Y%m%d%H')
-        # If first filename doesn't exist, try the next one, and so on...
-        # List in order of most preferred to least preferred.
-        potential_gridfiles = [
-                               "ens_"+str(ens)+"/"+ "0p15"+yyyymmddhh+"."+str(ens)+".nc",
-                               "ens_"+str(ens)+"/"+ "0p25"+yyyymmddhh+"."+str(ens)+".nc",
-                               "ens_"+str(ens)+"/"+ "0p5"+yyyymmddhh+"."+str(ens)+".nc",
-                               "ens_"+str(ens)+"/"+ yyyymmddhh+"."+str(ens)+".nc"
-                               ]
+        yyyymmdd_hhmm   = initial_time.strftime('%Y%m%d_%H%M')
+        potential_gridfiles = []
+        for ensemble_prefix in ensemble_prefixes:
+            # If first filename doesn't exist, try the next one, and so on...
+            # List in order of most preferred to least preferred.
+            potential_gridfiles.extend([
+                                   ensemble_prefix+str(ens)+"/SFC_"+yyyymmdd_hhmm+".nc", # Linus-style
+                                   ensemble_prefix+str(ens)+"/"+ "0p15"+yyyymmddhh+"."+str(ens)+".nc",
+                                   ensemble_prefix+str(ens)+"/"+ "0p25"+yyyymmddhh+"."+str(ens)+".nc",
+                                   ensemble_prefix+str(ens)+"/"+ "0p5"+yyyymmddhh+"."+str(ens)+".nc",
+                                   ensemble_prefix+str(ens)+"/"+ yyyymmddhh+"."+str(ens)+".nc"
+                                   ])
         for gridfile in potential_gridfiles:
             if os.path.isfile(griddir + gridfile):
                 break
@@ -653,12 +818,12 @@ def origgrid(df, griddir, debug=False):
 
         print('opening', gridfile)
         nc = Dataset(griddir + gridfile, "r")
-        lon = nc.variables['lon_0'][:]
-        lat = nc.variables['lat_0'][:]
+        lon = nc.variables[get_var_with_str(nc, 'lon_')][:]
+        lat = nc.variables[get_var_with_str(nc, 'lat_')][:]
         lonCell,latCell = np.meshgrid(lon, lat)
-        u10s  = nc.variables['10u_P1_L103_GLL0'][:]
-        v10s  = nc.variables['10v_P1_L103_GLL0'][:]
-        mslps = nc.variables['msl_P1_L101_GLL0'][:]
+        u10s  = nc.variables[get_var_with_str(nc, '10u')][:]
+        v10s  = nc.variables[get_var_with_str(nc, '10v')][:]
+        mslps = nc.variables[get_var_with_str(nc, 'msl')][:]
         model_forecast_times = nc.variables['forecast_time0'][:]
         nc.close()
         for index, row in group.iterrows():
@@ -671,10 +836,10 @@ def origgrid(df, griddir, debug=False):
             mslp = mslps[itime,:,:]
 
             # Extract vmax, RMW, minp, and radii of wind thresholds
-            raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = derived_winds(u10, v10, mslp, lonCell, latCell, row, debug=debug)
+            raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm = derived_winds(u10, v10, mslp, lonCell, latCell, row, wind_radii_method=wind_radii_method, debug=debug)
 
 
-            df = update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, debug=debug)
+            df = update_df(df, row, raw_vmax_kts, raw_RMW_nm, raw_minp, rad_nm, gridfile=gridfile, debug=debug)
 
     return df
 
