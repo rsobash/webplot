@@ -8,14 +8,19 @@ import scipy.ndimage as ndimage
 from scipy import interpolate
 from scipy.spatial import qhull
 import subprocess
-import mpas, mpas_vort_cell
+import mpas_vort_cell
 import re
+import pdb
 from fieldinfo import *
+print("importing mpas module. remove 'import mpas' to do some other model")
+from mpas import fieldinfo, makeEnsembleListMPAS
 # To use MFDataset, first convert netcdf4 to netcdf4-classic with nccopy
 # for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
 from netCDF4 import Dataset, MFDataset
 # xarray can handle muliple files with NETCDF4 non-classic. netCDF4 MFDataset can't do that.
 import xarray
+
+def log(msg): print(time.ctime(time.time()),':', msg)
 
 class webPlot:
     '''A class to plot data from NCAR ensemble'''
@@ -26,6 +31,7 @@ class webPlot:
         self.debug = self.opts['debug']
         self.autolevels = self.opts['autolevels']
         self.domain = self.opts['domain']
+        self.mesh= self.opts['mesh']
         if ',' in self.opts['timerange']: self.shr, self.ehr = list(map(int, self.opts['timerange'].split(',')))
         else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
         self.createFilename()
@@ -65,19 +71,21 @@ class webPlot:
         if result.returncode != 0:
             print(result)
 
-    def loadMap(self, overlay=False):
+    def loadMap(self, nlon_max=1500, nlat_max=1500, overlay=False):
         if hasattr(self, 'domain'): # once called with empty junk webplot class, just to get lats/lons/x/y/ibox attributes
             if overlay:
               PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/u/home/sobash/RT2015_gpx')   
               self.fig, self.ax, self.m = pickle.load(open('%s/overlays/rt2015_overlay_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
             else:
               PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/work/ahijevyc/share/rt_ensemble/python_scripts')
-              pklfile = '%s/rt2015_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain)
+              pklfile = '%s/%s_%s_%dx%d.pk'%(PYTHON_SCRIPTS_DIR,self.mesh,self.domain,nlon_max,nlat_max)
               print("loading "+pklfile) 
               self.fig, self.ax, self.m, self.lons,self.lats,self.min_grid_spacing_km,self.delta_deg,self.lon2d,self.lat2d,self.x2d,self.y2d,self.ibox,self.x,self.y,self.vtx,self.wts = pickle.load(open(pklfile, 'rb'))
 
     def readEnsemble(self):
-        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE)
+        if hasattr(self, 'data') and hasattr(self, 'missing_members') and 'must_reread_ensemble' not in self.data: 
+            return
+        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE, mesh=self.mesh)
 
     def plotDepartures(self):
         from collections import OrderedDict
@@ -87,7 +95,7 @@ class webPlot:
         if fieldname == 't2depart': normals = open('/glade/u/home/sobash/RT2015_gpx/hly-temp-normal.txt').readlines()
         elif fieldname == 'td2depart': normals = open('/glade/u/home/sobash/RT2015_gpx/hly-dewp-normal.txt').readlines()
 
-        # figure out local times for this UTC time because NCDC is stupid
+        # figure out local times for this UTC time because NCDC
         utcoffset = (time.mktime(time.gmtime()) - time.mktime(time.localtime()))/3600.0 #utc to local time offset for mountain time
         monthday  = (self.initdate + timedelta(hours=self.shr)).strftime(' %m %d ') #search for this string in normals file (see below)
         hr_pt        = (self.initdate + timedelta(hours=self.shr) - timedelta(hours=utcoffset+1)).hour # hour in pacific time
@@ -292,7 +300,7 @@ class webPlot:
 
         # Plot missing members (use wrfout count here, if upp missing this wont show that)
         if len(self.missing_members['wrfout']) > 0:
-            missing_members = sorted(set([ (x%10)+1 for x in self.missing_members['wrfout'] ])) #get member number from missing indices
+            missing_members = sorted(set([ (x%self.ENS_SIZE)+1 for x in self.missing_members['wrfout'] ])) #get member number from missing indices
             missing_members_string = ', '.join(str(x) for x in missing_members)
             self.ax.text(x1-5, y0+5, 'Missing member #s: %s'%missing_members_string, horizontalalignment='right')
 
@@ -322,7 +330,6 @@ class webPlot:
             min, max = self.data['fill'][0].min(), self.data['fill'][0].max()
             levels = np.linspace(min, max, num=10)
             cmap = colors.ListedColormap(self.opts['fill']['colors'])
-            norm = colors.BoundaryNorm(levels, cmap.N)
             tick_labels = levels[:-1]
         else:
             levels = self.opts['fill']['levels']
@@ -334,7 +341,7 @@ class webPlot:
                 cmap.set_over(self.opts['fill']['colors'][-1])
                 extend, extendfrac = 'max', 0.02
                 tick_labels = levels
-            norm = colors.BoundaryNorm(levels, cmap.N)
+        norm = colors.BoundaryNorm(levels, cmap.N)
 
         data = self.data['fill'][0]
         # regrid 1D mesh that needs to be smoothed
@@ -349,7 +356,7 @@ class webPlot:
         elif self.opts['fill']['ensprod'] in ['neprob', 'neprobgt', 'neproblt']:
             # assume the data array has been interpolated to lat/lon
             cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
-        else:      
+        elif self.vtx is not None:     # This is probably not an irregular mesh like MPAS 
             # use ibox and tri
             # Sometimes you get a warning kwarg tri is ignored. 
             # Tried removing tri=True but got IndexError: too many indices for array
@@ -358,6 +365,9 @@ class webPlot:
             data = self.latlonGrid(self.data['fill'][0])
             if debug:
                 print("plotFill: starting contourf with 2d array")
+            cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        else:
+            # Added for HRRR
             cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
 
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac)
@@ -475,7 +485,11 @@ class webPlot:
 
         if self.opts['contour']['name'] in ['sbcinh','mlcinh']: linewidth, alpha = 0.5, 0.75
         else: linewidth, alpha = 1.5, 1.0
-        data = self.latlonGrid(self.data['contour'][0])
+        data = self.data['contour'][0]
+        if self.debug:
+            pdb.set_trace()
+        if self.vtx is not None: # Interpolate to latlon Grid
+            data = self.latlonGrid(data)
         if self.opts['contour']['name'] in ['t2-0c']: data = ndimage.gaussian_filter(data, sigma=2)
         else: data = ndimage.gaussian_filter(data, sigma=25)
 
@@ -491,7 +505,7 @@ class webPlot:
         else: alpha=1.0
 
 
-        if debug: print("plotBarbs: starting barbs")
+        if self.debug: print("plotBarbs: starting barbs")
         # skip interval was intended for 2-D fields
         if len(self.x.shape) == 2:
             cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
@@ -534,7 +548,7 @@ class webPlot:
        #plt.legend(proxy, ["member %d"%i for i in range(1,11)], ncol=5, loc='right', bbox_to_anchor=(1.0,-0.05), fontsize=11, \
        #           frameon=False, borderpad=0.25, borderaxespad=0.25, handletextpad=0.2)
 
-    def plotStamp(self, debug=False):
+    def plotStamp(self):
        fig_width_px, dpi = 1280, 90
        fig = plt.figure(dpi=dpi)
 
@@ -562,7 +576,7 @@ class webPlot:
                w, h = (width_per_panel/float(fig_width))-spacing_w, (height_per_panel/float(fig_height))-spacing_h
                if member == 9: y = 0
 
-               if debug:
+               if self.debug:
                    print('member', member, 'creating axes at', x, y)
                thisax = fig.add_axes([x,y,w,h])
 
@@ -576,7 +590,7 @@ class webPlot:
                # plot, unless file that has fill field is missing, then skip
                if member not in self.missing_members[filename] and member < self.ENS_SIZE:
                    data = self.latlonGrid(self.data['fill'][0][memberidx,:])
-                   if debug:
+                   if self.debug:
                        print("plotStamp: starting contourf with regridded array", memberidx)
                    cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
                    memberidx += 1
@@ -658,6 +672,7 @@ def parseargs():
     parser.add_argument('-bs', '--barbskip', help='barb skip interval')
     parser.add_argument('-t', '--title', help='title for plot')
     parser.add_argument('-dom', '--domain', default='CONUS', help='domain to plot')
+    parser.add_argument('-m', '--mesh', default='rt2015', choices=['mpas','rt2015','hrrr'], help='mesh')
     parser.add_argument('-al', '--autolevels', action='store_true', help='use min/max to determine levels for plot')
     parser.add_argument('-con', '--convert', default=True, action='store_false', help='run final image through imagemagick')
     parser.add_argument('-i', '--interp', default=False, action='store_true', help='plot interpolated station values')
@@ -812,25 +827,27 @@ def makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE):
 
     return (file_list, missing_list)
 
-def makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=False):
+def makeEnsembleListHRRR(wrfinit, timerange, ENS_SIZE):
     # create lists of files (and missing file indices) for various file types
     shr, ehr = timerange
-    file_list    = { 'wrfout':[], 'diag':[] }
-    missing_list = { 'wrfout':[], 'diag':[] }
+    file_list    = { 'diag':[], 'wrfout':[]}
+    missing_list = { 'diag':[], 'wrfout':[]}
     missing_index = 0
+
     for hr in range(shr,ehr+1):
-        wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
         yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
+        yyyymmdd   = wrfinit.strftime('%Y%m%d')
+        init = wrfinit.strftime('%H')
+
         for mem in range(1,ENS_SIZE+1):
-            diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
-            if g193:
-                diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag_latlon_g193.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
-            if debug: print(diag)
+            if mem == 1: diag   = '/glade/scratch/ahijevyc/hrrr/%s/%s_i%s_f%03d_HRRR-NCEP_wrfprs.nc'%(yyyymmddhh,yyyymmdd,init,hr)
+            print(diag)
+
             if os.path.exists(diag): file_list['diag'].append(diag)
             else: missing_list['diag'].append(missing_index)
             missing_index += 1
-    if not file_list['diag']:
-        print('Empty file_list')
+
+
     return (file_list, missing_list)
 
 def makeEnsembleListArchive(wrfinit, timerange):
@@ -899,20 +916,27 @@ def makeEnsembleListDA(wrfinit, timerange):
                 missing_index += 1
     return (file_list, missing_list)
 
-def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_SIZE=10):
+def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_SIZE=10, mesh=None):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
     if debug: 
         print(fields)
     
     datadict = {}
+    file_list, missing_list = None, None
     #file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
     #file_list, missing_list = makeEnsembleListNSC(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListStan(wrfinit, timerange, ENS_SIZE) #construct list of files
-    file_list, missing_list = makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=debug) #construct list of files
+    if mesh == 'mpas':
+        file_list, missing_list = makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=debug) #construct list of files
     #file_list, missing_list = makeEnsembleListArchive(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListHybrid(wrfinit, timerange) #construct list of files
     #file_list, missing_list = makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE) #construct list of files
- 
+    #file_list, missing_list = makeEnsembleListHRRR(wrfinit, timerange, 1) #construct list of files
+    if not file_list:
+        print("no Ensemble file list. Exiting.")
+        print("Perhaps add --mesh mpas to make_webplot.py command line")
+        sys.exit(1)
+
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
         if not list(fields[f].keys()): continue
@@ -928,7 +952,8 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
         
         # open Multi-file netcdf dataset
         if debug:
-            print("opening xarray mfdataset ", file_list[filename])
+            print("opening xarray mfdataset "+ ' '.join(file_list[filename]))
+            log("opening xarray mfdataset "+ ' '.join(file_list[filename]))
 
         fh = xarray.open_mfdataset(file_list[filename],concat_dim='Time')
         # This concatenation dimension includes different times AND members.
@@ -937,7 +962,7 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
         # loop through each field, wind fields will have two fields that need to be read
         datalist = []
         for n,array in enumerate(arrays):
-            if debug: print('Reading', array)
+            if debug: log('Reading data '+ array)
 
             #read in 3D array (times*members,ny,nx) from file object
             if 'arraylevel' in fields[f]:
@@ -945,11 +970,10 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
                 else: level = fields[f]['arraylevel']
             else: level = None
             
-            #if level == 'max':  data = np.amax(fh.variables[array][:,:,:,:], axis=1)
-            #elif level is None: data = fh.variables[array][:,:,:]
-            #else:               data = fh.variables[array][:,level,:,:]
+            if level == 'max':  data = np.amax(fh.variables[array][:,:,:,:], axis=1)
+            elif level is None: data = fh.variables[array][:]
+            else:               data = fh.variables[array][:,level,:,:]
 
-            data = fh.variables[array][:,:]
             data = data.values # use the numpy array, not the full xarray object.
             # Many things that come afterward assume a numpy array, like flatten method. 
             if fh.variables[array].dims[1] == 'nVertices':
@@ -1067,7 +1091,8 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
                 data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = np.nanmax(data, axis=0)
-                if fieldtype in ['neprob','neprobgt','neproblt']: 
+                if fieldtype in ['neprob','neprobgt','neproblt']:
+                    datadict['must_reread_ensemble'] = True
                     junk = webPlot()
                     junk.domain = domain# define correct domain so .ibox can be correct
                     junk.loadMap() 
@@ -1123,8 +1148,8 @@ def readMPASVertices(ifile="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"
     fh.close()
     return (nEdgesOnCell, verticesOnCell)
 
-def readGridMPAS():
-    fh = Dataset("/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc", "r")
+def readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
+    fh = Dataset(init_file, "r")
     latCell = fh.variables['latCell'][:]
     lonCell = fh.variables['lonCell'][:]
     areaCell = fh.variables['areaCell'][:] # units m^2
@@ -1135,7 +1160,7 @@ def readGridMPAS():
     lonCell[lonCell >= 180] = lonCell[lonCell >= 180] - 360
     return (latCell, lonCell, min_grid_spacing_km)
 
-def saveNewMap(domstr='CONUS', wrfout=None):
+def saveNewMap(domstr='CONUS', mesh='rt2015', wrfout=None, nlon_max=1500, nlat_max=1500):
     # if domstr is not in the dictionary, then use provided wrfout to create new domain
     if domstr not in domains:
         fh = Dataset(wrfout, 'r')
@@ -1188,31 +1213,47 @@ def saveNewMap(domstr='CONUS', wrfout=None):
     #m.drawcounties(linewidth=0.1, color='gray', ax=ax)
 
 
-    # load lat/lons
-    lats, lons, min_grid_spacing_km = readGridMPAS()
-    delta_deg = min_grid_spacing_km / 111
-    if m.lonmin > 180 or m.lonmax > 180:
-        lons[lons<0] = lons[lons<0] + 360.  # change -180-0 to 180-360 to match m.lonmin and m.lonmax
-    # Replace m.lonmax with ur_lon? Otherwise, risk getting +179.999 when NW corner crosses the datetime
-    nlon = int((m.lonmax - m.lonmin)/delta_deg)
-    nlat = int((m.latmax - m.latmin)/delta_deg)
-    if nlon > 1500:
-        nlon = 1500
-    if nlat > 1500:
-        nlat = 1500
-    lon2d, lat2d = np.meshgrid(np.linspace(m.lonmin, m.lonmax, nlon), np.linspace(m.latmin,m.latmax,nlat))
-    # Convert to map coordinates instead of latlon to avoid the need to specify latlon=True in contour and barb methods.
-    x2d, y2d = m(lon2d,lat2d)
-    # ibox: subscripts within lat/lon box # only used to speed up 1-D array triangulation and plotting
-    ibox = (m.lonmin-1 <= lons ) & (lons < m.lonmax+1) & (m.latmin-1 <= lats) & (lats < m.latmax+1)
-    lons = lons[ibox]
-    lats = lats[ibox]
-    x, y = m(lons,lats)
+    if mesh == 'hrrr':
+        lons=None
+        lats=None
+        min_grid_spacing_km = None
+        delta_deg = None
+        # Can we 
+        fh = Dataset("/glade/scratch/ahijevyc/hrrr/2018120106/20181201_i06_f024_HRRR-NCEP_wrfprs.nc", 'r')
+        lat2d = fh.variables['gridlat_0'][:]
+        lon2d = fh.variables['gridlon_0'][:]
+        x2d, y2d = m(lon2d,lat2d)
+        ibox = None
+        x = None
+        y = None
+        vtx = None
+        wts = None
+    else:
+        # load lat/lons
+        lats, lons, min_grid_spacing_km = readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc")
+        delta_deg = min_grid_spacing_km / 111
+        if m.lonmin > 180 or m.lonmax > 180:
+            lons[lons<0] = lons[lons<0] + 360.  # change -180-0 to 180-360 to match m.lonmin and m.lonmax
+        # Replace m.lonmax with ur_lon? Otherwise, risk getting +179.999 when NW corner crosses the datetime
+        nlon = int((m.lonmax - m.lonmin)/delta_deg)
+        nlat = int((m.latmax - m.latmin)/delta_deg)
+        if nlon > nlon_max:
+            nlon = nlon_max
+        if nlat > nlat_max:
+            nlat = nlat_max
+        lon2d, lat2d = np.meshgrid(np.linspace(m.lonmin, m.lonmax, nlon), np.linspace(m.latmin,m.latmax,nlat))
+        # Convert to map coordinates instead of latlon to avoid the need to specify latlon=True in contour and barb methods.
+        x2d, y2d = m(lon2d,lat2d)
+        # ibox: subscripts within lat/lon box # only used to speed up 1-D array triangulation and plotting
+        ibox = (m.lonmin-1 <= lons ) & (lons < m.lonmax+1) & (m.latmin-1 <= lats) & (lats < m.latmax+1)
+        lons = lons[ibox]
+        lats = lats[ibox]
+        x, y = m(lons,lats)
 
-    # use .filled() to avoid error about masked arrays
-    vtx, wts = interp_weights(np.vstack((lons.filled(),lats.filled())).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
+        # use .filled() to avoid error about masked arrays
+        vtx, wts = interp_weights(np.vstack((lons.filled(),lats.filled())).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
 
-    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open('/glade/work/ahijevyc/share/rt_ensemble/python_scripts/rt2015_%s.pk'%domstr, 'wb'))
+    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open('/glade/work/ahijevyc/share/rt_ensemble/python_scripts/%s_%s_%dx%d.pk'%(mesh,domstr,nlon_max,nlat_max), 'wb'))
 
 def drawOverlay(domstr='CONUS'):
     ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
@@ -1379,4 +1420,3 @@ def computefrzdepth(t):
     frz_at_surface = np.where(t[0,:] < 33, True, False) #pts where surface T is below 33F
     max_column_t = np.amax(t, axis=0)
     above_frz_aloft = np.where(max_column_t > 32, True, False) #pts where max column T is above 32F
-
