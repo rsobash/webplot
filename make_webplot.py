@@ -1,21 +1,24 @@
-#!/usr/bin/env python
-
-import sys, time, os
+import logging
+import os
+import pdb
+import sys
+import time
 from webplot import webPlot, readGrid, saveNewMap
 
-def log(msg): print(time.ctime(time.time()),':', msg)
-
-log('Begin Script'); stime = time.time()
+logging.info('Begin Script')
+stime = time.time()
 
 regions = ['CONUS', 'NGP', 'SGP', 'CGP', 'MATL', 'NE', 'NW', 'SE', 'SW']
 
-if not os.path.exists('picklefilename.pk'):
-    saveNewMap(wrfout='wrfout_file_containing_lat_lons', domstr='name_for_domain') 
 
 newPlot = webPlot()
-log('Reading Data'); newPlot.readEnsemble()
+logging.info('Reading Data')
+newPlot.readEnsemble()
 
 for dom in regions:
+    pk_file = newPlot.pk_file
+    if not os.path.exists(pk_file):
+        saveNewMap(newPlot, wrfout='latlonfile.nc', init_file='/glade/campaign/mmm/parc/ahijevyc/MPAS/uni/2018103000/init.nc')
     file_not_created, num_attempts = True, 0
     while file_not_created and num_attempts <= 3:
         newPlot.domain = dom
@@ -23,25 +26,24 @@ for dom in regions:
         newPlot.createFilename()
         fname = newPlot.outfile
  
-        log('Loading Map for %s'%newPlot.domain)
         newPlot.loadMap()
 
-        log('Plotting Data')
+        logging.info('Plotting Data')
         if newPlot.opts['interp']:
           newPlot.plotInterp()
         else:
           newPlot.plotFields()
           newPlot.plotTitleTimes()
 
-        log('Writing Image')
+        logging.info('Writing Image')
         newPlot.saveFigure(trans=newPlot.opts['over'])
 
         if os.path.exists(fname):
             file_not_created = False 
-            log('Created %s, %.1f KB'%(fname,os.stat(fname).st_size/1000.0))
+            logging.info(f'Created {fname} {os.stat(fname).st_size/1000:.1f} KB')
     
         num_attempts += 1
 
 etime = time.time()
-log('End Plotting (took %.2f sec)'%(etime-stime))
+logging.info(f'End Plotting (took {etime-stime:.2f} sec)')
 

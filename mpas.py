@@ -56,12 +56,9 @@ fieldinfo['zlcl']['filename'] = 'diag' # only zlcl filename needed to be changed
 for plev in ['200', '250','300','500','700','850','925']:
     fieldinfo['hgt'+plev]['fname'] = ['height_'+plev+'hPa']
     fieldinfo['speed'+plev]['fname'] = ['uzonal_'+plev+'hPa','umeridional_'+plev+'hPa']
-    del fieldinfo['speed'+plev]['arraylevel']
     fieldinfo['temp'+plev]['fname'] = ['temperature_'+plev+'hPa']
-    del fieldinfo['temp'+plev]['arraylevel']
 for plev in ['500', '700', '850']:
     fieldinfo['td'+plev]['fname'] = ['dewpoint_'+plev+'hPa']
-    del fieldinfo['td'+plev]['arraylevel']
     fieldinfo['vort'+plev] = {'levels' : [0,9,12,15,18,21,24,27,30,33], 'cmap': readNCLcm('prcp_1'), 'fname': ['vorticity_'+plev+'hPa'], 'filename':'diag'}
 fieldinfo['vortpv']        = {'levels' : [0,9,12,15,18,21,24,27,30,33], 'cmap': readNCLcm('prcp_1'), 'fname': ['vort_pv'],               'filename':'diag'}
 for plev in ['300', '500', '700', '850', '925']:
@@ -81,19 +78,18 @@ for plev in ['200', '250', '300', '500', '700', '850', '925']:
     fieldinfo['wind'+plev] = { 'fname' : ['uzonal_'+plev+'hPa', 'umeridional_'+plev+'hPa'], 'filename':'diag', 'skip':50}
 
 
-def makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False):
+def makeEnsembleListMPAS(wrfinit, fhr, ENS_SIZE, g193=False):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'diag':[] }
     missing_list = { 'wrfout':[], 'diag':[] }
     missing_index = 0
-    for hr in range(shr,ehr+1):
+    for hr in fhr:
         wrfvalidstr = (wrfinit + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
         yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
         for mem in range(1,ENS_SIZE+1):
-            diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
+            diag   = '/glade/p/mmm/parc/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
             if g193:
-                diag   = '/glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag_latlon_g193.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
+                diag   = '/glade/p/mmm/parc/schwartz/MPAS_ens_15-3km_mesh/POST/%s/ens_%d/diag_latlon_g193.%s.nc'%(yyyymmddhh,mem,wrfvalidstr)
             logging.debug(diag)
             if os.path.exists(diag): file_list['diag'].append(diag)
             else: 

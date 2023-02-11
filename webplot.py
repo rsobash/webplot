@@ -1,43 +1,46 @@
+import argparse
+from collections import defaultdict
+import datetime
+from fieldinfo import *
+import logging
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
+from mpas import fieldinfo, makeEnsembleListMPAS
+import mpas_vort_cell
 from mpl_toolkits.basemap import *
-from datetime import *
+import pandas as pd
+import pdb
 import pickle
-import os, sys, time, argparse
+import os
 import scipy.ndimage as ndimage
 from scipy import interpolate
 from scipy.spatial import qhull
 import subprocess
-import mpas_vort_cell
 import re
-import pdb
-from fieldinfo import *
-print("importing mpas module. remove 'import mpas' to do some other model")
-from mpas import fieldinfo, makeEnsembleListMPAS
-# To use MFDataset, first convert netcdf4 to netcdf4-classic with nccopy
-# for example, nccopy -d nc7 /glade/p/nsc/nmmm0046/schwartz/MPAS_ens_15-3km_mesh/POST/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc /glade/scratch/ahijevyc/hwt2017/2017050100/ens_1/diag_latlon_g193.2017-05-02_00.00.00.nc
-from netCDF4 import Dataset, MFDataset
-# xarray can handle muliple files with NETCDF4 non-classic. netCDF4 MFDataset can't do that.
+import sys
+import time
 import xarray
 
-def log(msg): print(time.ctime(time.time()),':', msg)
+logging.basicConfig(level=logging.INFO)
 
 class webPlot:
     '''A class to plot data from NCAR ensemble'''
     def __init__(self):
         self.opts = parseargs()
-        self.initdate = datetime.strptime(self.opts['date'], '%Y%m%d%H')
+        self.initdate = pd.to_datetime(self.opts['date'])
         self.title = self.opts['title']
         self.debug = self.opts['debug']
         self.autolevels = self.opts['autolevels']
         self.domain = self.opts['domain']
-        self.mesh= self.opts['mesh']
-        if ',' in self.opts['timerange']: self.shr, self.ehr = list(map(int, self.opts['timerange'].split(',')))
-        else: self.shr, self.ehr = int(self.opts['timerange']), int(self.opts['timerange'])
+        self.fhr = self.opts['fhr']
+        self.mesh = self.opts['mesh']
+        self.nlat_max = self.opts['nlat_max']
+        self.nlon_max = self.opts['nlon_max']
+        self.pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.mesh}_{self.domain}_{self.nlon_max}x{self.nlat_max}.pk")
         self.createFilename()
-        self.ENS_SIZE = int(os.getenv('ENS_SIZE', 10))
+        self.ENS_SIZE = self.opts['ENS_SIZE']
  
-    def createFilename(self):
+    def createFilename(self, prefx=''):
         for f in ['fill', 'contour','barb']: # CSS added this for loop and everything in it
            if 'name' in self.opts[f]:
               if 'thresh' in self.opts[f]:
@@ -46,24 +49,24 @@ class webPlot:
                  prefx = self.opts[f]['name']+'_'+self.opts[f]['ensprod'] # CSS
               break
 
-        if self.shr == self.ehr:  # CSS
-           self.outfile = prefx+'_f'+'%03d'%self.shr+'_'+self.domain+'.png' # 'test.png' # CSS
+        shr = min(self.fhr)
+        ehr = max(self.fhr)
+        if len(self.fhr) == 1:
+            self.outfile = f"{prefx}_f{shr:03.0f}_{self.domain}.png"
         else: # CSS
-           #self.outfile = prefx+'_f'+'%03d'%self.shr+'-f'+'%03d'%self.ehr+'_'+self.domain+'_'+self.opts['date']+'.png' # 'test.png' # CSS
-           self.outfile = prefx+'_f'+'%03d'%self.shr+'-f'+'%03d'%self.ehr+'_'+self.domain+'.png' # 'test.png' # CSS
+            self.outfile = f"{prefx}_f{shr:03.0f}-f{ehr:03.0f}_{self.domain}.png"
 
         # create yyyymmddhh/domain/ directory if needed
-        subdir_path = os.path.join(self.opts['date'], self.domain)
+        subdir_path = os.path.join(os.getenv('TMPDIR'), self.opts['date'], self.domain)
         if not os.path.isdir(subdir_path):
-            print("webPlot.createFilename(): making new output directory "+subdir_path)
-            os.mkdir(subdir_path)
+            logging.warning(f"webPlot.createFilename(): making new output directory {subdir_path}")
+            os.makedirs(subdir_path)
         # prepend subdir_path to outfile.
         self.outfile = os.path.join(subdir_path, self.outfile)
 
-    def toServer(self, debug=False, url="nova.mmm.ucar.edu:/web/htdocs/projects/mpas/plots/."):
-        rsync_opts = '-RL'
-        if debug:
-            rsync_opts += 'v' # append a 'v' for verbose
+
+    def toServer(self, url="nova.mmm.ucar.edu:/web/htdocs/projects/mpas/plots/."):
+        rsync_opts = '-RLv'
         #result = subprocess.run(['rsync', rsync_opts, '--timeout=10', '--bwlimit=3', self.outfile, url], check=True, stdout=subprocess.PIPE) # tried capture_output=True but this version of subprocess doesn't recognize it.
         # send directly to koa instead of nova. Carter set up ssh keys. Not working. Get return status=14
         result = subprocess.run(['rsync', '-e',  "'ssh -vi /home/ahijevyc/.ssh/id_rsa'", '-avR', self.outfile, url], check=True, stdout=subprocess.PIPE)
@@ -71,21 +74,16 @@ class webPlot:
         if result.returncode != 0:
             print(result)
 
-    def loadMap(self, nlon_max=1500, nlat_max=1500, overlay=False):
-        if hasattr(self, 'domain'): # once called with empty junk webplot class, just to get lats/lons/x/y/ibox attributes
-            if overlay:
-              PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/u/home/sobash/RT2015_gpx')   
-              self.fig, self.ax, self.m = pickle.load(open('%s/overlays/rt2015_overlay_%s.pk'%(PYTHON_SCRIPTS_DIR,self.domain), 'r'))
-            else:
-              PYTHON_SCRIPTS_DIR = os.getenv('PYTHON_SCRIPTS_DIR', '/glade/work/ahijevyc/share/rt_ensemble/python_scripts')
-              pklfile = '%s/%s_%s_%dx%d.pk'%(PYTHON_SCRIPTS_DIR,self.mesh,self.domain,nlon_max,nlat_max)
-              print("loading "+pklfile) 
-              self.fig, self.ax, self.m, self.lons,self.lats,self.min_grid_spacing_km,self.delta_deg,self.lon2d,self.lat2d,self.x2d,self.y2d,self.ibox,self.x,self.y,self.vtx,self.wts = pickle.load(open(pklfile, 'rb'))
+    def loadMap(self, overlay=False):
+        logging.info(f"loadMap {self.pk_file}")
+        (self.fig, self.ax, self.m, self.lons, self.lats, self.min_grid_spacing_km, self.delta_deg,
+                self.lon2d, self.lat2d, self.x2d, self.y2d, self.ibox, self.x, self.y, self.vtx, 
+                self.wts) = pickle.load(open(self.pk_file, 'rb'))
 
     def readEnsemble(self):
         if hasattr(self, 'data') and hasattr(self, 'missing_members') and 'must_reread_ensemble' not in self.data: 
             return
-        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, timerange=[self.shr,self.ehr], fields=self.opts, debug=self.debug, ENS_SIZE=self.ENS_SIZE, mesh=self.mesh)
+        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, fhr=self.fhr, fields=self.opts, ENS_SIZE=self.ENS_SIZE, mesh=self.mesh)
 
     def plotDepartures(self):
         from collections import OrderedDict
@@ -235,15 +233,13 @@ class webPlot:
         validstr = (self.initdate+timedelta(hours=self.shr)).strftime('%Y%m%d%H')
 
         # READ IN MRMS GRID
-        fh = Dataset('/glade/p/nmmm0001/sobash/MRMS/mrms_grid.nc', 'r')
-        lats = fh.variables['lat_0'][:]
-        lons = fh.variables['lon_0'][:]
-        fh.close()
+        fh = xarray.open_dataset('/glade/p/nmmm0001/sobash/MRMS/mrms_grid.nc')
+        lats = fh['lat_0']
+        lons = fh['lon_0']
 
         # READ IN DATA
-        fh = Dataset('/glade/scratch/sobash/mrms_tmp/cref_mrms_%s.nc'%validstr, 'r')
-        mrms = fh.variables['CREF'][:]
-        fh.close()
+        fh = xarray.open_dataset('/glade/scratch/sobash/mrms_tmp/cref_mrms_%s.nc'%validstr)
+        mrms = fh['CREF']
 
         lats, lons = np.meshgrid(lats, lons)
         x, y = self.m(lons, lats)
@@ -259,10 +255,9 @@ class webPlot:
         #validstr = (self.initdate+timedelta(hours=self.shr-1)).strftime('%Y%m%d00')
       
         # READ IN MRMS GRID
-        fh = Dataset('/glade/p/nmmm0001/sobash/MRMS/mrms_grid.nc', 'r')
-        lats = fh.variables['lat_0'][:]
-        lons = fh.variables['lon_0'][:]
-        fh.close()
+        fh = xarray.open_dataset('/glade/p/nmmm0001/sobash/MRMS/mrms_grid.nc')
+        lats = fh['lat_0']
+        lons = fh['lon_0']
 
         # READ IN DATA
         if field == 'qpe':
@@ -274,9 +269,8 @@ class webPlot:
           field = 'CREF'
           levels = [40,1000]
 
-        fh = Dataset(fname, 'r')
-        mrms = fh.variables[field][0,:]
-        fh.close()
+        fh = xarray.open_dataset(fname)
+        mrms = fh[field]
 
         # plot
         lats, lons = np.meshgrid(lats, lons)
@@ -321,7 +315,7 @@ class webPlot:
        
         if self.opts['fill']['name'] in ['t2depart', 'td2depart']: self.plotDepartures()
   
-    def plotFill(self, debug=False):
+    def plotFill(self):
         if self.opts['fill']['name'] == 'ptype': self.plotFill_ptype(); return
         if self.opts['fill']['name'][0:6] == 'ptypes': self.plotFill_ptypes(); return
         elif self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
@@ -363,8 +357,7 @@ class webPlot:
             #print("plotFill: starting contourf with ",self.ibox.shape," array "+self.opts['fill']['name'])
             #cs1 = self.m.contourf(self.x, self.y, self.data['fill'][0][self.ibox], tri=True, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax) #MPAS
             data = self.latlonGrid(self.data['fill'][0])
-            if debug:
-                print("plotFill: starting contourf with 2d array")
+            logging.debug("plotFill: starting contourf with 2d array")
             cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
         else:
             # Added for HRRR
@@ -468,6 +461,7 @@ class webPlot:
         cb.outline.set_linewidth(0.5)
 
     def interpolatetri(self, values, vtx, wts):
+        logging.info("interpolatetri")
         return np.einsum('nj,nj->n', np.take(values, vtx), wts)
 
     def latlonGrid(self, data):
@@ -475,9 +469,10 @@ class webPlot:
         data = data[self.ibox]
         if hasattr(self, "vtx") and hasattr(self, "wts"):
             data_gridded = self.interpolatetri(data, self.vtx, self.wts)
+            logging.info("reshape")
             data_gridded = np.reshape(data_gridded, self.lat2d.shape)
         else:
-            print("latlonGrid: interpolating to latlon grid with griddata()")
+            logging.info("latlonGrid: interpolating to latlon grid with griddata()")
             data_gridded = interpolate.griddata((self.lons, self.lats), data, (self.lon2d, self.lat2d), method='nearest')
         return data_gridded
 
@@ -486,8 +481,6 @@ class webPlot:
         if self.opts['contour']['name'] in ['sbcinh','mlcinh']: linewidth, alpha = 0.5, 0.75
         else: linewidth, alpha = 1.5, 1.0
         data = self.data['contour'][0]
-        if self.debug:
-            pdb.set_trace()
         if self.vtx is not None: # Interpolate to latlon Grid
             data = self.latlonGrid(data)
         if self.opts['contour']['name'] in ['t2-0c']: data = ndimage.gaussian_filter(data, sigma=2)
@@ -496,7 +489,7 @@ class webPlot:
         cs2 = self.m.contour(self.x2d, self.y2d, data, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
         plt.clabel(cs2, fontsize='small', fmt='%i')
 
-    def plotBarbs(self, debug=False):
+    def plotBarbs(self):
         skip = self.opts['barb']['skip']
         if self.domain != 'CONUS': skip = int(skip*0.45)
         if self.domain == 'NA': skip = int(skip*2)
@@ -505,7 +498,7 @@ class webPlot:
         else: alpha=1.0
 
 
-        if self.debug: print("plotBarbs: starting barbs")
+        logging.debug("plotBarbs: starting barbs")
         # skip interval was intended for 2-D fields
         if len(self.x.shape) == 2:
             cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip], color='black', alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
@@ -576,8 +569,7 @@ class webPlot:
                w, h = (width_per_panel/float(fig_width))-spacing_w, (height_per_panel/float(fig_height))-spacing_h
                if member == 9: y = 0
 
-               if self.debug:
-                   print('member', member, 'creating axes at', x, y)
+               logging.debug(f'member {member} creating axes at {x},{y}')
                thisax = fig.add_axes([x,y,w,h])
 
                thisax.axis('on')
@@ -590,8 +582,7 @@ class webPlot:
                # plot, unless file that has fill field is missing, then skip
                if member not in self.missing_members[filename] and member < self.ENS_SIZE:
                    data = self.latlonGrid(self.data['fill'][0][memberidx,:])
-                   if self.debug:
-                       print("plotStamp: starting contourf with regridded array", memberidx)
+                   logging.debug(f"plotStamp: starting contourf with regridded array {memberidx}")
                    cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
                    memberidx += 1
 
@@ -621,17 +612,19 @@ class webPlot:
 
     def getInitValidStr(self):
        initstr  = self.initdate.strftime(' Init: %a %Y-%m-%d %H UTC')
-       if ((self.ehr - self.shr) == 0):
-            validstr = (self.initdate+timedelta(hours=self.shr)).strftime('Valid: %a %Y-%m-%d %H UTC')
+       if len(self.fhr) == 1:
+            validstr = (self.initdate+datetime.timedelta(hours=self.fhr)).strftime('Valid: %a %Y-%m-%d %H UTC')
        else:
+            shr = min(self.fhr)
+            ehr = max(self.fhr)
             # match precip or precip-24hr, but not precipacc
             # accept precip-24hr, precip-48hr, precip-120hr, etc.
             if self.opts['fill']['name'] == 'precip' or is_precip_diff(self.opts['fill']['name']):
                 # do not subtract 1 from start hour if array is difference of accumulated precipitation
-                validstr1 = (self.initdate+timedelta(hours=(self.shr))).strftime('%a %Y-%m-%d %H UTC')
+                validstr1 = (self.initdate + datetime.timedelta(hours=shr)).strftime('%a %Y-%m-%d %H UTC')
             else:
-                validstr1 = (self.initdate+timedelta(hours=(self.shr-1))).strftime('%a %Y-%m-%d %H UTC')
-            validstr2 = (self.initdate+timedelta(hours=self.ehr)).strftime('%a %Y-%m-%d %H UTC')
+                validstr1 = (self.initdate + datetime.timedelta(hours=shr-1)).strftime('%a %Y-%m-%d %H UTC')
+            validstr2 = (self.initdate+datetime.timedelta(hours=ehr)).strftime('%a %Y-%m-%d %H UTC')
             validstr = "Valid: %s - %s"%(validstr1, validstr2)
        return initstr, validstr
 
@@ -640,7 +633,7 @@ class webPlot:
         if 'ensprod' in self.opts['fill']:  # CSS needed incase not a fill plot
            if not trans and self.opts['fill']['ensprod'] not in ['stamp', 'maxstamp']:
              x, y = self.ax.transAxes.transform((0,0))
-             self.fig.figimage(plt.imread('ncar.png'), xo=x, yo=(y-44), zorder=1000)
+             #self.fig.figimage(plt.imread('ncar.png'), xo=x, yo=(y-44), zorder=1000)
              plt.text(x+10, y-54, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
 
         plt.savefig(self.outfile, dpi=90, transparent=trans)
@@ -664,15 +657,19 @@ def parseargs():
     '''Parse arguments and return dictionary of fill, contour and barb field parameters'''
 
     parser = argparse.ArgumentParser(description='Web plotting script for NCAR ensemble')
-    parser.add_argument('-d', '--date', default=datetime.utcnow().strftime('%Y%m%d00'), help='initialization datetime (YYYYMMDDHH)')
-    parser.add_argument('-tr', '--timerange', required=True, help='time range of forecasts (START,END)')
+    parser.add_argument('-d', '--date', default=datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0),
+            help='initialization datetime')
+    parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
     parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(list(fieldinfo.keys())))
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-b', '--barb', help='barb field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-bs', '--barbskip', help='barb skip interval')
-    parser.add_argument('-t', '--title', help='title for plot')
     parser.add_argument('-dom', '--domain', default='CONUS', help='domain to plot')
-    parser.add_argument('-m', '--mesh', default='rt2015', choices=['mpas','rt2015','hrrr'], help='mesh')
+    parser.add_argument('--ENS_SIZE', type=int, default=10, help='ensemble size')
+    parser.add_argument('-t', '--title', help='title for plot')
+    parser.add_argument('--nlon_max', default=1500, help='max pts in longitude dimension')
+    parser.add_argument('--nlat_max', default=1500, help='max pts in latitude dimension')
+    parser.add_argument('-m', '--mesh', default='rt2015', choices=['mpas','rt2015','hrrr','uni'], help='mesh')
     parser.add_argument('-al', '--autolevels', action='store_true', help='use min/max to determine levels for plot')
     parser.add_argument('-con', '--convert', default=True, action='store_false', help='run final image through imagemagick')
     parser.add_argument('-i', '--interp', default=False, action='store_true', help='plot interpolated station values')
@@ -690,6 +687,8 @@ def parseargs():
         thisdict = {}
         if opts[f] is not None:
             input = opts[f].lower().split('_')
+
+            assert len(input) > 1, f"{f} has 2-3 components separated by _. Add '_mean'?"
 
             thisdict['name']      = input[0]
             thisdict['ensprod']   = input[1]
@@ -739,17 +738,16 @@ def parseargs():
         opts[f] = thisdict
     return opts
 
-def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
+def makeEnsembleList(wrfinit, fhr, ENS_SIZE):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'upp': [], 'diag':[] }
     missing_list = { 'wrfout':[], 'upp': [], 'diag':[] }
 
     EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/wrfrt/realtime_ensemble/ensf')
 
     missing_index = 0
-    for hr in range(shr,ehr+1):
-            wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H:%M:%S')
+    for hr in fhr:
+            wrfvalidstr = (wrfinit + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H:%M:%S')
             yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
             for mem in range(1,ENS_SIZE+1):
                 wrfout = '%s/%s/wrf_rundir/ens_%d/wrfout_d02_%s'%(EXP_DIR,yyyymmddhh,mem,wrfvalidstr)
@@ -767,41 +765,36 @@ def makeEnsembleList(wrfinit, timerange, ENS_SIZE):
                 missing_index += 1
     return (file_list, missing_list)
 
-def makeEnsembleListStan(wrfinit, timerange, ENS_SIZE):
+def makeEnsembleListStan(wrfinit, fhr, ENS_SIZE):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'upp': [], 'diag':[] }
     missing_list = { 'wrfout':[], 'upp': [], 'diag':[] }
 
     EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/trier/jun4-5/')
 
     missing_index = 0
-    #for hr in range(shr,ehr+1):
-    print(shr, ehr)
-    for m in range(shr*60,(ehr*60)+1,15):
-            #wrfvalidstr = (wrfinit + timedelta(hours=m)).strftime('%Y-%m-%d_%H:%M:%S')
-            wrfvalidstr = (wrfinit + timedelta(minutes=m)).strftime('%Y-%m-%d_%H:%M:%S')
-            yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
-            for mem in range(1,ENS_SIZE+1):
-                wrfout = '%s/ens_%d/wrfout_d02_%s'%(EXP_DIR,mem,wrfvalidstr)
-                diag   = '%s/ens_%d/diags_d02.%s.nc'%(EXP_DIR,mem,wrfvalidstr)
-                print(diag)
-                if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
-                else: missing_list['wrfout'].append(missing_index)
-                if os.path.exists(diag): file_list['diag'].append(diag)
-                else: missing_list['diag'].append(missing_index)
-                missing_index += 1
+    for h in fhr:
+        wrfvalidstr = (wrfinit + datetime.timedelta(hours=h)).strftime('%Y-%m-%d_%H:%M:%S')
+        yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
+        for mem in range(1,ENS_SIZE+1):
+            wrfout = '%s/ens_%d/wrfout_d02_%s'%(EXP_DIR,mem,wrfvalidstr)
+            diag   = '%s/ens_%d/diags_d02.%s.nc'%(EXP_DIR,mem,wrfvalidstr)
+            print(diag)
+            if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
+            else: missing_list['wrfout'].append(missing_index)
+            if os.path.exists(diag): file_list['diag'].append(diag)
+            else: missing_list['diag'].append(missing_index)
+            missing_index += 1
     return (file_list, missing_list)
 
-def makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE):
+def makeEnsembleListHREF(wrfinit, fhr, ENS_SIZE):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'diag':[] }
     missing_list = { 'wrfout':[], 'diag':[] }
     missing_index = 0
-    wrfinit_prev = (wrfinit - timedelta(hours=12))
+    wrfinit_prev = (wrfinit - datetime.timedelta(hours=12))
 
-    for hr in range(shr,ehr+1):
+    for hr in fhr:
         yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
         yyyymmddhh_p = wrfinit_prev.strftime('%Y%m%d%H')
         hr_p = hr - 12
@@ -827,14 +820,13 @@ def makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE):
 
     return (file_list, missing_list)
 
-def makeEnsembleListHRRR(wrfinit, timerange, ENS_SIZE):
+def makeEnsembleListHRRR(wrfinit, fhr, ENS_SIZE):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'diag':[], 'wrfout':[]}
     missing_list = { 'diag':[], 'wrfout':[]}
     missing_index = 0
 
-    for hr in range(shr,ehr+1):
+    for hr in fhr:
         yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
         yyyymmdd   = wrfinit.strftime('%Y%m%d')
         init = wrfinit.strftime('%H')
@@ -850,9 +842,8 @@ def makeEnsembleListHRRR(wrfinit, timerange, ENS_SIZE):
 
     return (file_list, missing_list)
 
-def makeEnsembleListArchive(wrfinit, timerange):
+def makeEnsembleListArchive(wrfinit):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'upp': [], 'diag':[] }
     missing_list = { 'wrfout':[], 'upp': [], 'diag':[] }
 
@@ -871,17 +862,16 @@ def makeEnsembleListArchive(wrfinit, timerange):
         missing_index += 1
     return (file_list, missing_list)
 
-def makeEnsembleListNSC(wrfinit, timerange):
+def makeEnsembleListNSC(wrfinit, fhr):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'diag':[] }
     missing_list = { 'wrfout':[], 'diag':[] }
     
     EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/wrfrt/realtime_ensemble/ensf')
 
     missing_index = 0
-    for hr in range(shr,ehr+1):
-            wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H_%M_%S')
+    for hr in fhr:
+            wrfvalidstr = (wrfinit + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H_%M_%S')
             yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
             for mem in range(1,2):
                 diag   = '%s/%s/diags_d01_%s.nc'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
@@ -891,9 +881,8 @@ def makeEnsembleListNSC(wrfinit, timerange):
                 missing_index += 1
     return (file_list, missing_list)
 
-def makeEnsembleListDA(wrfinit, timerange):
+def makeEnsembleListDA(wrfinit, fhr):
     # create lists of files (and missing file indices) for various file types
-    shr, ehr = timerange
     file_list    = { 'wrfout':[], 'diag':[] }
     missing_list = { 'wrfout':[], 'diag':[] }
 
@@ -901,46 +890,50 @@ def makeEnsembleListDA(wrfinit, timerange):
     #EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/sobash/VSE/1km_pbl7')
     EXP_DIR = os.getenv('EXP_DIR', '/glade/scratch/schwartz/VSE/3km_pbl7')
     missing_index = 0
-    for hr in range(shr,ehr+1):
-            wrfvalidstr = (wrfinit + timedelta(hours=hr)).strftime('%Y-%m-%d_%H:%M:%S')
-            yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
-            for mem in range(1,2):
-                wrfout = '%s/%s/wrfout_d01_%s'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
-                #diag   = '%s/%s/wrf/join/vse_d01.%s.nc'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
-                diag   = '%s/%s/wrf/diags_d01.%s.nc'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
-                print(diag)
-                if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
-                else: missing_list['wrfout'].append(missing_index)
-                if os.path.exists(diag): file_list['diag'].append(diag)
-                else: missing_list['diag'].append(missing_index)
-                missing_index += 1
+    for hr in fhr:
+        wrfvalidstr = (wrfinit + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H:%M:%S')
+        yyyymmddhh = wrfinit.strftime('%Y%m%d%H')
+        for mem in range(1,2):
+            wrfout = '%s/%s/wrfout_d01_%s'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
+            #diag   = '%s/%s/wrf/join/vse_d01.%s.nc'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
+            diag   = '%s/%s/wrf/diags_d01.%s.nc'%(EXP_DIR,yyyymmddhh,wrfvalidstr)
+            print(diag)
+            if os.path.exists(wrfout): file_list['wrfout'].append(wrfout)
+            else: missing_list['wrfout'].append(missing_index)
+            if os.path.exists(diag): file_list['diag'].append(diag)
+            else: missing_list['diag'].append(missing_index)
+            missing_index += 1
     return (file_list, missing_list)
 
-def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_SIZE=10, mesh=None):
+def readEnsemble(wrfinit, domain, fhr=None, fields=None, ENS_SIZE=10, mesh=None):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
-    if debug: 
-        print(fields)
+    logging.debug(fields)
     
     datadict = {}
-    file_list, missing_list = None, None
-    #file_list, missing_list = makeEnsembleList(wrfinit, timerange, ENS_SIZE) #construct list of files
-    #file_list, missing_list = makeEnsembleListNSC(wrfinit, timerange) #construct list of files
-    #file_list, missing_list = makeEnsembleListStan(wrfinit, timerange, ENS_SIZE) #construct list of files
+    file_list = defaultdict(lambda: [])
+    missing_list = defaultdict(lambda: [])
+    #file_list, missing_list = makeEnsembleList(wrfinit, fhr, ENS_SIZE) #construct list of files
+    #file_list, missing_list = makeEnsembleListNSC(wrfinit, fhr) #construct list of files
+    #file_list, missing_list = makeEnsembleListStan(wrfinit, fhr, ENS_SIZE) #construct list of files
     if mesh == 'mpas':
-        file_list, missing_list = makeEnsembleListMPAS(wrfinit, timerange, ENS_SIZE, g193=False, debug=debug) #construct list of files
-    #file_list, missing_list = makeEnsembleListArchive(wrfinit, timerange) #construct list of files
-    #file_list, missing_list = makeEnsembleListHybrid(wrfinit, timerange) #construct list of files
-    #file_list, missing_list = makeEnsembleListHREF(wrfinit, timerange, ENS_SIZE) #construct list of files
-    #file_list, missing_list = makeEnsembleListHRRR(wrfinit, timerange, 1) #construct list of files
+        file_list, missing_list = makeEnsembleListMPAS(wrfinit, fhr, ENS_SIZE, g193=False) #construct list of files
+    if mesh == 'uni' and ENS_SIZE == 1:
+        idir = "/glade/campaign/mmm/parc/ahijevyc/MPAS"
+        file_list['diag'] = [os.path.join(idir, mesh, wrfinit.strftime('%Y%m%d%H'),
+            (wrfinit+datetime.timedelta(hours=f)).strftime('diag.%Y-%m-%d_%H.%M.%S.nc')) for f in fhr] 
+    #file_list, missing_list = makeEnsembleListArchive(wrfinit, fhr) #construct list of files
+    #file_list, missing_list = makeEnsembleListHybrid(wrfinit, fhr) #construct list of files
+    #file_list, missing_list = makeEnsembleListHREF(wrfinit, fhr, ENS_SIZE) #construct list of files
+    #file_list, missing_list = makeEnsembleListHRRR(wrfinit, fhr, 1) #construct list of files
     if not file_list:
-        print("no Ensemble file list. Exiting.")
-        print("Perhaps add --mesh mpas to make_webplot.py command line")
+        logging.error("no Ensemble file list. Exiting.")
+        logging.error("Perhaps add --mesh mpas to make_webplot.py command line")
         sys.exit(1)
 
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
         if not list(fields[f].keys()): continue
-        if debug: print('Reading field:', fields[f]['name'], 'from', fields[f]['filename'])
+        logging.debug(f"Reading field: {fields[f]['name']} from {fields[f]['filename']}")
         
         # save some variables for use in this function
         filename = fields[f]['filename']
@@ -948,21 +941,19 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
         fieldtype = fields[f]['ensprod']
         fieldname = fields[f]['name']
         if fieldtype in ['prob', 'neprob', 'problt', 'probgt', 'neprobgt', 'neproblt', 'prob3d']: thresh = fields[f]['thresh']
-        if fieldtype[0:3]=='mem': member = int(fieldtype[3:])
+        if fieldtype.startswith('mem'): member = int(fieldtype[3:])
         
         # open Multi-file netcdf dataset
-        if debug:
-            print("opening xarray mfdataset "+ ' '.join(file_list[filename]))
-            log("opening xarray mfdataset "+ ' '.join(file_list[filename]))
+        logging.debug(f"opening xarray mfdataset {' '.join(file_list[filename])}")
 
-        fh = xarray.open_mfdataset(file_list[filename],concat_dim='Time')
+        fh = xarray.open_mfdataset(file_list[filename],engine='netcdf4',combine="nested", concat_dim='Time')
         # This concatenation dimension includes different times AND members.
         fh = fh.rename({'Time':'TimeMember'})
        
         # loop through each field, wind fields will have two fields that need to be read
         datalist = []
         for n,array in enumerate(arrays):
-            if debug: log('Reading data '+ array)
+            logging.debug(f'Reading data {array}')
 
             #read in 3D array (times*members,ny,nx) from file object
             if 'arraylevel' in fields[f]:
@@ -970,15 +961,14 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
                 else: level = fields[f]['arraylevel']
             else: level = None
             
-            if level == 'max':  data = np.amax(fh.variables[array][:,:,:,:], axis=1)
-            elif level is None: data = fh.variables[array][:]
-            else:               data = fh.variables[array][:,level,:,:]
+            if level == 'max':  data = fh[array].max(dim=level)
+            elif level is None: data = fh[array]
+            else:               data = fh[array].sel(level=level)
 
             data = data.values # use the numpy array, not the full xarray object.
             # Many things that come afterward assume a numpy array, like flatten method. 
-            if fh.variables[array].dims[1] == 'nVertices':
-                if debug:
-                    print("field on vertices, like vorticity_500hPa, put on cells")
+            if fh[array].dims[1] == 'nVertices':
+                logging.debug("field on vertices, like vorticity_500hPa, put on cells")
                 fieldv = data
                 nEdgesOnCell, verticesOnCell = readMPASVertices()
                 # verticesOnCell is the transpose of what mpas_vort_cell1 expects
@@ -1020,7 +1010,7 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
             datalist.append(data)
 
         # these are derived fields, we don't have in any of the input files but we can compute
-        print(datalist[0].shape)
+        logging.info(f"datalist[0].shape={datalist[0].shape}")
         if 'name' in fields[f]:
             if fieldname in ['shr06mag', 'shr01mag']:
                 # derive wind shear from top and bottom level
@@ -1045,8 +1035,7 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
 
 
           if is_precip_diff(fieldname):
-            if debug:
-                  print("Deriving accumulated precipitation. Subract ensemble at first time from ensemble at last time")
+            logging.debug("Deriving accumulated precipitation. Subract ensemble at first time from ensemble at last time")
             for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
             # last and first time in the requested time range
             ensemble_at_last_time  = data[-ENS_SIZE:]
@@ -1103,7 +1092,7 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
                         data3d[i] = data2d
                     miles_to_km = 1.60934
                     roi = 25 * miles_to_km / junk.min_grid_spacing_km 
-                    if debug: print("roi",roi)
+                    logging.debug(f"roi {roi}")
                     data = compute_neprob(data3d, roi=int(roi), sigma=float(fields['sigma']), type='gaussian')
                 else: data = np.nanmean(data, axis=0) 
                 data = data+0.001 #hack to ensure that plot displays discrete prob values
@@ -1112,9 +1101,9 @@ def readEnsemble(wrfinit, domain, timerange=None, fields=None, debug=False, ENS_
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0)
                 data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
                 data = compute_prob3d(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
-          if debug: print('field '+ fieldname+ ' has shape', data.shape, 'max', data.max(), 'min', data.min())
+          logging.debug(f'field {fieldname} has shape {data.shape} range {data.min()}-{data.min()}')
 
-          print(data.max())
+          logging.info(f"max={data.max()}")
           #kernel = np.ones((7,7))
           #data = ndimage.filters.convolve(data, kernel/float(kernel.sum()))
           # attach data arrays for each type of field (e.g. { 'fill':[data], 'barb':[data,data] })
@@ -1134,25 +1123,24 @@ def is_precip_diff(s):
 
 
 def readGrid(file_dir):
-    f = Dataset(file_dir, 'r')
-    lats   = f.variables['XLAT'][0,:]
-    lons   = f.variables['XLONG'][0,:]
-    f.close()
+    f = xarray.open_dataset(file_dir)
+    lats   = f['XLAT']
+    lons   = f['XLONG']
     return (lats,lons)
 
 def readMPASVertices(ifile="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
     # Used for regridding field from vertex to cell. latVertex and lonVertex not needed
-    fh = Dataset(ifile, "r")
-    nEdgesOnCell = fh.variables['nEdgesOnCell'][:]
-    verticesOnCell = fh.variables['verticesOnCell'][:]
-    fh.close()
+    fh = xarray.open_dataset(ifile)
+    nEdgesOnCell = fh['nEdgesOnCell']
+    verticesOnCell = fh['verticesOnCell']
     return (nEdgesOnCell, verticesOnCell)
 
 def readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
-    fh = Dataset(init_file, "r")
-    latCell = fh.variables['latCell'][:]
-    lonCell = fh.variables['lonCell'][:]
-    areaCell = fh.variables['areaCell'][:] # units m^2
+    logging.debug(f"open {init_file}")
+    fh = xarray.open_dataset(init_file)
+    latCell = fh['latCell']
+    lonCell = fh['lonCell']
+    areaCell = fh['areaCell'] # units m^2
     min_grid_spacing_km = 2. * np.sqrt(areaCell.min()/np.pi/1000/1000)
     # min_grid_spacing_km used for grid spacing of interpolated lat-lon grid.
     fh.close()
@@ -1160,33 +1148,13 @@ def readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"
     lonCell[lonCell >= 180] = lonCell[lonCell >= 180] - 360
     return (latCell, lonCell, min_grid_spacing_km)
 
-def saveNewMap(domstr='CONUS', mesh='rt2015', wrfout=None, nlon_max=1500, nlat_max=1500):
-    # if domstr is not in the dictionary, then use provided wrfout to create new domain
-    if domstr not in domains:
-        fh = Dataset(wrfout, 'r')
-        lats = fh.variables['XLAT'][0,:]
-        lons = fh.variables['XLONG'][0,:]
-        ll_lat, ll_lon, ur_lat, ur_lon = lats[0,0], lons[0,0], lats[-1,-1], lons[-1,-1]
-        lat_1, lat_2, lon_0 = fh.TRUELAT1, fh.TRUELAT2, fh.STAND_LON 
-        fig_width = 1080
-        fh.close()
-    # else assume domstr is in dictionary
-    elif 'file' in domains[domstr]:
-        fh = Dataset(domains[domstr]['file'], 'r')
-        lats = fh.variables['XLAT'][0,:]
-        lons = fh.variables['XLONG'][0,:]
-        ll_lat, ll_lon, ur_lat, ur_lon = lats[0,0], lons[0,0], lats[-1,-1], lons[-1,-1]
-        lat_1, lat_2, lon_0 = fh.TRUELAT1, fh.TRUELAT2, fh.STAND_LON 
-        if 'fig_width' in domains[domstr]: fig_width = domains[domstr]['fig_width']
-        else: fig_width = 1080
-        fh.close()
-    else:
-        ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
-        fig_width = domains[domstr]['fig_width']
-        lat_1, lat_2, lon_0 = 32.0, 46.0, -101.0
-        if domstr=='NA':
-            lon_0 = -115.0
-
+def saveNewMap(plot, wrfout=None, init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
+    fh = xarray.open_dataset(wrfout)
+    lats = fh['XLAT'].isel(Time=0).data
+    lons = fh['XLONG'].isel(Time=0).data
+    ll_lat, ll_lon, ur_lat, ur_lon = lats[0,0], lons[0,0], lats[-1,-1], lons[-1,-1]
+    lat_1, lat_2, lon_0 = fh.TRUELAT1, fh.TRUELAT2, fh.STAND_LON 
+    fig_width = 1080
     dpi = 90 
     fig = plt.figure(dpi=dpi)
     m = Basemap(projection='lcc', resolution='i', llcrnrlon=ll_lon, llcrnrlat=ll_lat, urcrnrlon=ur_lon, urcrnrlat=ur_lat, \
@@ -1213,15 +1181,15 @@ def saveNewMap(domstr='CONUS', mesh='rt2015', wrfout=None, nlon_max=1500, nlat_m
     #m.drawcounties(linewidth=0.1, color='gray', ax=ax)
 
 
-    if mesh == 'hrrr':
+    if plot.mesh == 'hrrr':
         lons=None
         lats=None
         min_grid_spacing_km = None
         delta_deg = None
         # Can we 
-        fh = Dataset("/glade/scratch/ahijevyc/hrrr/2018120106/20181201_i06_f024_HRRR-NCEP_wrfprs.nc", 'r')
-        lat2d = fh.variables['gridlat_0'][:]
-        lon2d = fh.variables['gridlon_0'][:]
+        fh = xarray.open_dataset("/glade/scratch/ahijevyc/hrrr/2018120106/20181201_i06_f024_HRRR-NCEP_wrfprs.nc")
+        lat2d = fh['gridlat_0']
+        lon2d = fh['gridlon_0']
         x2d, y2d = m(lon2d,lat2d)
         ibox = None
         x = None
@@ -1230,17 +1198,17 @@ def saveNewMap(domstr='CONUS', mesh='rt2015', wrfout=None, nlon_max=1500, nlat_m
         wts = None
     else:
         # load lat/lons
-        lats, lons, min_grid_spacing_km = readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc")
+        lats, lons, min_grid_spacing_km = readGridMPAS(init_file=init_file)
         delta_deg = min_grid_spacing_km / 111
         if m.lonmin > 180 or m.lonmax > 180:
             lons[lons<0] = lons[lons<0] + 360.  # change -180-0 to 180-360 to match m.lonmin and m.lonmax
         # Replace m.lonmax with ur_lon? Otherwise, risk getting +179.999 when NW corner crosses the datetime
         nlon = int((m.lonmax - m.lonmin)/delta_deg)
         nlat = int((m.latmax - m.latmin)/delta_deg)
-        if nlon > nlon_max:
-            nlon = nlon_max
-        if nlat > nlat_max:
-            nlat = nlat_max
+        if nlon > plot.nlon_max:
+            nlon = plot.nlon_max
+        if nlat > plot.nlat_max:
+            nlat = plot.nlat_max
         lon2d, lat2d = np.meshgrid(np.linspace(m.lonmin, m.lonmax, nlon), np.linspace(m.latmin,m.latmax,nlat))
         # Convert to map coordinates instead of latlon to avoid the need to specify latlon=True in contour and barb methods.
         x2d, y2d = m(lon2d,lat2d)
@@ -1250,16 +1218,18 @@ def saveNewMap(domstr='CONUS', mesh='rt2015', wrfout=None, nlon_max=1500, nlat_m
         lats = lats[ibox]
         x, y = m(lons,lats)
 
-        # use .filled() to avoid error about masked arrays
-        vtx, wts = interp_weights(np.vstack((lons.filled(),lats.filled())).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
+        logging.info("interp_weights")
+        vtx, wts = interp_weights(np.vstack((lons,lats)).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
 
-    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open('/glade/work/ahijevyc/share/rt_ensemble/python_scripts/%s_%s_%dx%d.pk'%(mesh,domstr,nlon_max,nlat_max), 'wb'))
+    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open(plot.pk_file, 'wb'))
+    
 
-def drawOverlay(domstr='CONUS'):
-    ll_lat, ll_lon, ur_lat, ur_lon = domains[domstr]['corners']
-    fig_width = domains[domstr]['fig_width']
+
+def drawOverlay(domain='CONUS'):
+    ll_lat, ll_lon, ur_lat, ur_lon = domains[domain]['corners']
+    fig_width = domains[domain]['fig_width']
     lat_1, lat_2, lon_0 = 32.0, 46.0, -101.0
-    if domstr=='NA':
+    if domain=='NA':
         lon_0 = -115.0
     dpi = 90
 
@@ -1283,7 +1253,7 @@ def drawOverlay(domstr='CONUS'):
     m.drawcoastlines(linewidth=0, ax=ax)
     m.drawcounties(ax=ax)
     ax.axis('off')
-    plt.savefig('overlay_counties_%s.png'%domstr, dpi=90, transparent=True)
+    plt.savefig('overlay_counties_%s.png'%domain, dpi=90, transparent=True)
 
 def compute_pmm(ensemble):
     members = ensemble.shape[0]
@@ -1354,10 +1324,9 @@ def computestp(data):
     return stp
 
 def compute_sspf(data, cref_files):
-    fh = MFDataset(cref_files)
-    #cref = fh.variables['REFD_MAX'][:] #in diag files
-    cref = fh.variables['REFL_MAX_COL'][:] #in upp files
-    fh.close()
+    fh = xarray.open_mfdataset(cref_files)
+    #cref = fh['REFD_MAX'] #in diag files
+    cref = fh['REFL_MAX_COL'] #in upp files
 
     # if all times are in one file, then need to reshape and extract desired times
     #cref = cref.reshape((10,49,cref.shape[1],cref.shape[2])) # reshape

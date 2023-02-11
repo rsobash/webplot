@@ -101,6 +101,7 @@ fieldinfo = {
   # RAS: adjusted these ranges - need to capture higher wind speeds
   'speed200'     :{ 'levels' : [25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110], 'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_200hPa','umeridional_200hPa'], 'filename':'diag'},
   'speed250'     :{ 'levels' : [25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110], 'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_250hPa','umeridional_250hPa'], 'filename':'diag'},
+  'speed300'     :{ 'levels' : [25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110], 'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_300hPa','umeridional_300hPa'], 'filename':'diag'},
   'speed500'     :{ 'levels' : [15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100],   'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_500hPa','umeridional_500hPa'], 'filename':'diag'},
   'speed700'     :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85],        'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_700hPa','umeridional_700hPa'], 'filename':'diag'},
   'speed850'     :{ 'levels' : [6,10,14,18,22,26,30,34,38,42,46,50,54,58,62,66,70,74],     'cmap': readNCLcm('wind_17lev'), 'fname': ['uzonal_850hPa','umeridional_850hPa'], 'filename':'diag'},
@@ -112,6 +113,7 @@ fieldinfo = {
   'temp700'      :{ 'levels' : [-36,-33,-30,-27,-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,21],            'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['temperature_700hPa'], 'filename':'diag'},
   'temp850'      :{ 'levels' : [-30,-27,-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,21,24,27,30],           'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['temperature_850hPa'], 'filename':'diag'},
   'temp925'      :{ 'levels' : [-24,-21,-18,-15,-12,-9,-6,-3,0,3,6,9,12,15,18,21,24,27,30,33],                'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['temperature_925hPa'], 'filename':'diag'},
+  'td500'        :{ 'levels' : [-30,-25,-20,-15,-10,-5,0,5,10],                     'cmap' : readNCLcm('nice_gfdl')[3:193], 'fname': ['dewpoint_500hPa'], 'filename':'diag'},
   'td700'        :{ 'levels' : [-30,-25,-20,-15,-10,-5,0,5,10],                     'cmap' : readNCLcm('nice_gfdl')[3:193], 'fname': ['dewpoint_700hPa'], 'filename':'diag'},
   'td850'        :{ 'levels' : [-40,-35,-30,-25,-20,-15,-10,-5,0,5,10,15,20,25,30], 'cmap' : readNCLcm('nice_gfdl')[3:193], 'fname': ['dewpoint_850hPa'], 'filename':'diag'},
   'td925'        :{ 'levels' : [-30,-25,-20,-15,-10,-5,0,5,10,15,20,25,30],         'cmap' : readNCLcm('nice_gfdl')[3:193], 'fname': ['dewpoint_925hPa'], 'filename':'diag'},
