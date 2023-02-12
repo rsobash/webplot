@@ -1,7 +1,7 @@
 import argparse
 from collections import defaultdict
 import datetime
-from fieldinfo import *
+from fieldinfo import domains
 import logging
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -25,20 +25,19 @@ logging.basicConfig(level=logging.INFO)
 
 class webPlot:
     '''A class to plot data from NCAR ensemble'''
-    def __init__(self):
+    def __init__(self, domain=None):
         self.opts = parseargs()
         self.initdate = pd.to_datetime(self.opts['date'])
-        self.title = self.opts['title']
-        self.debug = self.opts['debug']
+        self.ENS_SIZE = self.opts['ENS_SIZE']
         self.autolevels = self.opts['autolevels']
-        self.domain = self.opts['domain']
+        self.debug = self.opts['debug']
+        self.domain = domain
         self.fhr = self.opts['fhr']
         self.mesh = self.opts['mesh']
         self.nlat_max = self.opts['nlat_max']
         self.nlon_max = self.opts['nlon_max']
-        self.pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.mesh}_{self.domain}_{self.nlon_max}x{self.nlat_max}.pk")
+        self.title = self.opts['title']
         self.createFilename()
-        self.ENS_SIZE = self.opts['ENS_SIZE']
  
     def createFilename(self, prefx=''):
         for f in ['fill', 'contour','barb']: # CSS added this for loop and everything in it
@@ -75,15 +74,16 @@ class webPlot:
             print(result)
 
     def loadMap(self, overlay=False):
-        logging.info(f"loadMap {self.pk_file}")
+        pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.mesh}_{self.domain}_{self.nlon_max}x{self.nlat_max}.pk")
+        if not os.path.exists(pk_file):
+            saveNewMap(self, pk_file, init_file='/glade/campaign/mmm/parc/ahijevyc/MPAS/uni/2018103000/init.nc')
+        logging.info(f"loadMap {pk_file}")
         (self.fig, self.ax, self.m, self.lons, self.lats, self.min_grid_spacing_km, self.delta_deg,
                 self.lon2d, self.lat2d, self.x2d, self.y2d, self.ibox, self.x, self.y, self.vtx, 
-                self.wts) = pickle.load(open(self.pk_file, 'rb'))
+                self.wts) = pickle.load(open(pk_file, 'rb'))
 
     def readEnsemble(self):
-        if hasattr(self, 'data') and hasattr(self, 'missing_members') and 'must_reread_ensemble' not in self.data: 
-            return
-        self.data, self.missing_members = readEnsemble(self.initdate, self.domain, fhr=self.fhr, fields=self.opts, ENS_SIZE=self.ENS_SIZE, mesh=self.mesh)
+        self.data, self.missing_members = readEnsemble(self.initdate, fhr=self.fhr, fields=self.opts, ENS_SIZE=self.ENS_SIZE, mesh=self.mesh)
 
     def plotDepartures(self):
         from collections import OrderedDict
@@ -348,7 +348,13 @@ class webPlot:
             if self.opts['fill']['name'] == 'pbmin' : data = ndimage.gaussian_filter(data, sigma=2)
             cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
         elif self.opts['fill']['ensprod'] in ['neprob', 'neprobgt', 'neproblt']:
-            # assume the data array has been interpolated to lat/lon
+            data = self.latlonGrid(data)
+            miles_to_km = 1.60934
+            roi = 25 * miles_to_km / self.min_grid_spacing_km 
+            logging.debug(f"roi {roi}")
+            data = compute_neprob(data, roi=int(roi), sigma=float(fields['sigma']), type='gaussian')
+            data = data+0.001 #hack to ensure that plot displays discrete prob values
+# assume the data array has been interpolated to lat/lon
             cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
         elif self.vtx is not None:     # This is probably not an irregular mesh like MPAS 
             # use ibox and tri
@@ -465,6 +471,7 @@ class webPlot:
         return np.einsum('nj,nj->n', np.take(values, vtx), wts)
 
     def latlonGrid(self, data):
+        # TODO: Handle ensemble - 3d data
         # apply ibox to data
         data = data[self.ibox]
         if hasattr(self, "vtx") and hasattr(self, "wts"):
@@ -664,7 +671,6 @@ def parseargs():
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-b', '--barb', help='barb field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-bs', '--barbskip', help='barb skip interval')
-    parser.add_argument('-dom', '--domain', default='CONUS', help='domain to plot')
     parser.add_argument('--ENS_SIZE', type=int, default=10, help='ensemble size')
     parser.add_argument('-t', '--title', help='title for plot')
     parser.add_argument('--nlon_max', default=1500, help='max pts in longitude dimension')
@@ -905,7 +911,7 @@ def makeEnsembleListDA(wrfinit, fhr):
             missing_index += 1
     return (file_list, missing_list)
 
-def readEnsemble(wrfinit, domain, fhr=None, fields=None, ENS_SIZE=10, mesh=None):
+def readEnsemble(wrfinit, fhr=None, fields=None, ENS_SIZE=10, mesh=None):
     ''' Reads in desired fields and returns 2-D arrays of data for each field (barb/contour/field) '''
     logging.debug(fields)
     
@@ -1075,27 +1081,8 @@ def readEnsemble(wrfinit, domain, fhr=None, fields=None, ENS_SIZE=10, mesh=None)
                 data = np.nanmax(data, axis=0)
                 data = data[member-1,:] 
           elif (fieldtype in ['prob', 'neprob', 'problt', 'probgt', 'neprobgt', 'neproblt']):
-                if fieldtype in ['prob', 'neprob', 'probgt', 'neprobgt']: data = (data>=thresh).astype('float')
-                elif fieldtype in ['problt', 'neproblt']: data = (data<thresh).astype('float')
-                for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0) #insert nan for missing files
-                data = np.reshape(data, (ntimes,ENS_SIZE,*spatial_dimensions))
-                data = np.nanmax(data, axis=0)
-                if fieldtype in ['neprob','neprobgt','neproblt']:
-                    datadict['must_reread_ensemble'] = True
-                    junk = webPlot()
-                    junk.domain = domain# define correct domain so .ibox can be correct
-                    junk.loadMap() 
-                    data2d = junk.latlonGrid(data[0,:])
-                    data3d = np.tile(data2d, (ENS_SIZE,1,1))
-                    for i in range(1,ENS_SIZE):
-                        data2d = junk.latlonGrid(data[i,:])
-                        data3d[i] = data2d
-                    miles_to_km = 1.60934
-                    roi = 25 * miles_to_km / junk.min_grid_spacing_km 
-                    logging.debug(f"roi {roi}")
-                    data = compute_neprob(data3d, roi=int(roi), sigma=float(fields['sigma']), type='gaussian')
-                else: data = np.nanmean(data, axis=0) 
-                data = data+0.001 #hack to ensure that plot displays discrete prob values
+                if fieldtype.endswith('prob') or fieldtype.endswith('gt'): data = (data>=thresh).astype('float')
+                elif fieldtype.endswith('lt'): data = (data<thresh).astype('float')
           elif (fieldtype in ['prob3d']):
                 data = (data>=thresh).astype('float')
                 for i in missing_list[filename]: data = np.insert(data, i, np.nan, axis=0)
@@ -1148,12 +1135,9 @@ def readGridMPAS(init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"
     lonCell[lonCell >= 180] = lonCell[lonCell >= 180] - 360
     return (latCell, lonCell, min_grid_spacing_km)
 
-def saveNewMap(plot, wrfout=None, init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
-    fh = xarray.open_dataset(wrfout)
-    lats = fh['XLAT'].isel(Time=0).data
-    lons = fh['XLONG'].isel(Time=0).data
-    ll_lat, ll_lon, ur_lat, ur_lon = lats[0,0], lons[0,0], lats[-1,-1], lons[-1,-1]
-    lat_1, lat_2, lon_0 = fh.TRUELAT1, fh.TRUELAT2, fh.STAND_LON 
+def saveNewMap(plot, pk_file, init_file="/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"):
+    ll_lat, ll_lon, ur_lat, ur_lon = domains[plot.domain]['corners']
+    lat_1, lat_2, lon_0 = 32., 46., -101.
     fig_width = 1080
     dpi = 90 
     fig = plt.figure(dpi=dpi)
@@ -1221,7 +1205,7 @@ def saveNewMap(plot, wrfout=None, init_file="/glade/p/mmm/parc/schwartz/MPAS/15-
         logging.info("interp_weights")
         vtx, wts = interp_weights(np.vstack((lons,lats)).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
 
-    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open(plot.pk_file, 'wb'))
+    pickle.dump((fig,ax,m,lons,lats,min_grid_spacing_km,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open(pk_file, 'wb'))
     
 
 
@@ -1271,7 +1255,7 @@ def compute_pmm(ensemble):
 
 def compute_neprob(ensemble, roi=0, sigma=0.0, type='gaussian'):
     if len(ensemble.shape) < 3:
-        print('compute_neprob: needs ensemble of 2D arrays, not 1D arrays')
+        logggin.error('compute_neprob: needs ensemble of 2D arrays, not 1D arrays')
         sys.exit(1)
     y,x = np.ogrid[-roi:roi+1, -roi:roi+1]
     kernel = x**2 + y**2 <= roi**2
