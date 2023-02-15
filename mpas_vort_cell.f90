@@ -1,18 +1,16 @@
-subroutine mpas_vort_cell1( nEdgesOnCell, verticesOnCell, maxEdges, nVertLevels, nCells, nVertices, fieldv, fieldc ) 
+subroutine vert2cell(nEdgesOnCell, verticesOnCell, maxEdges, nVertLevels, nCells, nVertices, fieldv, fieldc)
 implicit none
 
-! input
-
 integer, intent(in) :: maxEdges, nVertLevels, nCells, nVertices
+!f2py required :: maxEdges, nVertLevels, nCells, nVertices
 integer, intent(in) :: nEdgesOnCell(nCells)
 integer, intent(in) :: verticesOnCell(maxEdges,nCells)
 real*8, intent(in)  :: fieldv(nVertLevels,nVertices)
 real*8, intent(out) :: fieldc(nVertLevels,nCells)
 
-!  local
-
 integer i,j,k
 real*8 factor
+
 do k=1,nVertLevels
     do i=1,nCells
         factor = 1./nEdgesOnCell(i)
@@ -24,4 +22,4 @@ do k=1,nVertLevels
     end do
 end do
 return
-end
+end subroutine vert2cell
