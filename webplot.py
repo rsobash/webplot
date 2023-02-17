@@ -1,14 +1,15 @@
 import argparse
+import cartopy
 from collections import defaultdict
 import datetime
-from fieldinfo import domains
+from fieldinfo import domains, readNCLcm
 import logging
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
+from metpy.units import units
 import mpas
 from mpas import fieldinfo, mesh_config, makeEnsembleList
-import vert2cell # created with f2py3 -c mpas_vort_cell.f90 -m vert2cell
-from mpl_toolkits.basemap import *
+import numpy as np
 import pandas as pd
 import pdb
 import pickle
@@ -20,6 +21,10 @@ import subprocess
 import re
 import sys
 import time
+# created with f2py3 -c mpas_vort_cell.f90 -m vert2cell
+# Had to fix /glade/u/home/ahijevyc/miniconda3/envs/webplot/lib/python3.11/site-packages/numpy/f2py/src/fortranobject.c
+# Moved int i declaration outside for loop. (line 707)
+import vert2cell
 import xarray
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
@@ -41,7 +46,6 @@ class webPlot:
         self.title = self.opts['title']
 
         self.get_mpas_mesh()
-        self.createFilename()
         self.loadMap()
         self.data, self.missing_members = readEnsemble(self)
         self.plotFields()
@@ -60,9 +64,9 @@ class webPlot:
         shr = min(self.fhr)
         ehr = max(self.fhr)
         if len(self.fhr) == 1:
-            self.outfile = f"{prefx}_f{shr:03.0f}_{self.domain}.png"
+            outfile = f"{prefx}_f{shr:03.0f}_{self.domain}.png"
         else: # CSS
-            self.outfile = f"{prefx}_f{shr:03.0f}-f{ehr:03.0f}_{self.domain}.png"
+            outfile = f"{prefx}_f{shr:03.0f}-f{ehr:03.0f}_{self.domain}.png"
 
         # create yyyymmddhh/domain/ directory if needed
         subdir_path = os.path.join(os.getenv('TMPDIR'), self.opts['date'], self.domain)
@@ -70,17 +74,25 @@ class webPlot:
             logging.warning(f"webPlot.createFilename(): making new output directory {subdir_path}")
             os.makedirs(subdir_path)
         # prepend subdir_path to outfile.
-        self.outfile = os.path.join(subdir_path, self.outfile)
-        self.outfile = os.path.realpath(self.outfile)
+        outfile = os.path.join(subdir_path, outfile)
+        outfile = os.path.realpath(outfile)
+        return outfile
 
-    def loadMap(self, overlay=False):
-        pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.meshstr}_{self.domain}_{self.nlon_max}x{self.nlat_max}.pk")
-        if not os.path.exists(pk_file):
-            saveNewMap(self, pk_file)
-        logging.debug(f"loadMap: use old pickle file {pk_file}")
-        (self.fig, self.ax, self.m, self.lons, self.lats, self.delta_deg,
+    def loadMap(self):
+        self.pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.meshstr}_{self.domain}_{self.nlon_max}x{self.nlat_max}.pk")
+        if not os.path.exists(self.pk_file):
+            saveNewMap(self)
+        logging.debug(f"loadMap: use old pickle file {self.pk_file}")
+        (self.ax, self.extent, self.lons, self.lats, 
                 self.lon2d, self.lat2d, self.x2d, self.y2d, self.ibox, self.x, self.y, self.vtx, 
-                self.wts) = pickle.load(open(pk_file, 'rb'))
+                self.wts) = pickle.load(open(self.pk_file, 'rb'))
+
+    def drawOverlay(self):
+        domain=self.domain
+        logging.info(f"drawOverlay: domain={domain}")
+        self.ax.axis('off')
+        self.ax.set_extent(self.extent, crs=self.ax.projection)
+        plt.savefig(f'overlay_counties_{domain}.png', transparent=True)
 
     def get_mpas_mesh(self):
         path = self.opts["init_file"]
@@ -92,7 +104,6 @@ class webPlot:
         self.mpas_mesh = mpas_mesh
 
     def plotTitleTimes(self):
-        if self.opts['over']: return
         fontdict = {'family':'monospace', 'size':12, 'weight':'bold'}
 
         # place title and times above corners of map
@@ -101,9 +112,10 @@ class webPlot:
         x1, y1 = self.ax.transAxes.transform((1,1))
         self.ax.text(x0, y1+10, self.title, fontdict=fontdict, transform=None)
 
-        initstr, validstr = self.getInitValidStr() 
-        self.ax.text(x1, y1+20, initstr, horizontalalignment='right', transform=None)
-        self.ax.text(x1, y1+5, validstr, horizontalalignment='right', transform=None)
+        fontdict = {'family':'monospace'}
+        initstr, validstr = self.getInitValidStr()
+        self.ax.text(1, 1, initstr+"\n"+validstr, fontdict=fontdict, horizontalalignment='right', 
+                verticalalignment="bottom", transform=self.ax.transAxes)
 
         # Plot missing members 
         if len(self.missing_members):
@@ -123,10 +135,11 @@ class webPlot:
             else: self.plotContour()
         
         if 'barb' in self.data:
-            assert not self.opts['contour']['ensprod'].endswith('stamp'), "TODO: postage stamp barbs"
+            assert not self.opts['barb']['ensprod'].endswith('stamp'), "TODO: postage stamp barbs"
             self.plotBarbs()
   
     def plotFill(self):
+        if self.opts['fill']['name'] == 'crefuh': self.plotReflectivityUH(); return
         if self.autolevels:
             min, max = self.data['fill'][0].min(), self.data['fill'][0].max()
             levels = np.linspace(min, max, num=10)
@@ -145,47 +158,41 @@ class webPlot:
         norm = colors.BoundaryNorm(levels, cmap.N)
 
         data = self.data['fill'][0]
-        data = self.latlonGrid(data)
-        # regrid 1D mesh that needs to be smoothed
+        if not self.opts['fill']['ensprod'].startswith('neprob'):
+            logging.info(f"plotFill: latlonGrid")
+            data = self.latlonGrid(data)
         if self.opts['fill']['name'] in ['avo500', 'vort500', 'pbmin']:
-            # smooth some of the fill fields. use .values to preserve DataArray attributes.
+            logging.info(f"smooth {data.name}")
+            # use .values to preserve DataArray attributes.
             data.values = ndimage.gaussian_filter(data, sigma=4)
-        elif self.opts['fill']['ensprod'].startswith('neprob'):
-            miles_to_km = 1.60934
-            roi = 25 * miles_to_km / self.min_grid_spacing_km 
-            logging.debug(f"roi {roi}")
-            data = compute_neprob(data, roi=int(roi), sigma=float(fields['sigma']), type='gaussian')
-            data = data+0.001 #hack to ensure that plot displays discrete prob values
 
-        cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        cs1 = self.ax.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max')
         label = f"{data.long_name} [{data.units}]"
         self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac, label=label)
 
     def plotReflectivityUH(self):
         levels = self.opts['fill']['levels']
         cmap = colors.ListedColormap(self.opts['fill']['colors'])
+        extend, extendfrac = 'neither', 0.0
         norm = colors.BoundaryNorm(levels, cmap.N)
         tick_labels = levels[:-1]
 
-        cs1 = self.m.contourf(self.x2d, self.y2d, self.latlonGrid(self.data['fill'][0]), levels=levels, cmap=cmap, norm=norm, extend='max', ax=self.ax)
+        logging.info(f"plotReflectivityUH: latlonGrid {self.data['fill'][0].long_name}")
+        data = self.latlonGrid(self.data["fill"][0])
+        cs1 = self.ax.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max')
+        logging.info(f"plotReflectivityUH: latlonGrid {self.data['fill'][1].long_name}")
         uh =  self.latlonGrid(self.data['fill'][1])
-        self.m.contourf(self.x2d, self.y2d, uh, levels=[100,1000], colors='black', ax=self.ax, alpha=0.3)
-        cs2 = self.m.contour( self.x2d, self.y2d, uh, levels=[100], colors='k', linewidths=0.5, ax=self.ax)
-        # for some reason the zero contour is plotted if there are no other valid contours
-        # are there some small negatives due to regridding? No.
-        if 0.0 in cs2.levels:
-            print("webplot.plotReflectivityUH has zero contour for some reason. Hide it")
-            for i in cs2.collections:
-                i.remove()
+        minUH = 100
+        logging.info(f"plotReflectivityUH: UH shading and contour above {minUH}")
+        self.ax.contourf(self.x2d, self.y2d, uh, levels=[minUH,1000], colors='black', alpha=0.3)
+        cs2 = self.ax.contour( self.x2d, self.y2d, uh, levels=[minUH], colors='k', linewidths=0.5)
                
-        self.plotColorbar(cs1, levels, tick_labels)
+        label = f"{data.long_name} [{data.units}], shaded {uh.long_name} above ${minUH} {uh.units}$"
+        self.plotColorbar(cs1, levels, tick_labels, extend, extendfrac, label=label)
 
     def plotColorbar(self, cs, levels, tick_labels, extend='neither', extendfrac=0.0, label=""):
-        # make axes for colorbar, 175px to left and 30px down from bottom of map 
-        x0, y0 = self.ax.transAxes.transform((0,0))
-        x, y = self.fig.transFigure.inverted().transform((x0+175,y0-29.5))
-        cax = self.fig.add_axes([x,y,0.985-x,y/3.0])
-        cb = plt.colorbar(cs, cax=cax, orientation='horizontal', extend=extend, extendfrac=extendfrac, ticks=tick_labels, label=label)
+        cb = plt.colorbar(cs, ax=self.ax, location="bottom", orientation='horizontal', extend=extend, shrink=0.65, 
+                anchor=(1,1), panchor=(1,0), aspect=55, pad=0.03, extendfrac=extendfrac, ticks=tick_labels, label=label)
         cb.ax.xaxis.set_label_position('top')
         cb.outline.set_linewidth(0.5)
 
@@ -193,16 +200,17 @@ class webPlot:
         return np.einsum('nj,nj->n', np.take(values, vtx), wts)
 
     def latlonGrid(self, data):
+        logging.debug(f"latlonGrid: {data.name}")
         data = data.metpy.dequantify() # Allow units to transfer to gridded array via attribute
         # apply ibox to data
-        data = data[self.ibox]
+        data = data.isel(nCells=self.ibox)
         if hasattr(self, "vtx") and hasattr(self, "wts"):
             logging.debug("latlonGrid: interpolatetri(vtx and wts)")
             # by using .values, Avoid interpolatetri ValueError: dimensions ('nCells',) must have the same length as the number of data dimensions, ndim=2
             data_gridded = self.interpolatetri(data.values, self.vtx, self.wts)
             data_gridded = np.reshape(data_gridded, self.lat2d.shape)
         else:
-            logging.info("latlonGrid: interpolate to latlon grid with griddata()")
+            logging.info("latlonGrid: interpolate with griddata()")
             data_gridded = griddata((self.lons, self.lats), data, (self.lon2d, self.lat2d), method='nearest')
         data_gridded = xarray.DataArray(data = data_gridded, coords = dict(lat=self.lat2d[:,0], lon=self.lon2d[0]), attrs=data.attrs)
         return data_gridded
@@ -211,12 +219,15 @@ class webPlot:
         if self.opts['contour']['name'] in ['sbcinh','mlcinh']: linewidth, alpha = 0.5, 0.75
         else: linewidth, alpha = 1.5, 1.0
         data = self.data['contour'][0]
-        data_gridded = self.latlonGrid(data)
 
-        if self.opts['contour']['name'] in ['t2-0c']: data_gridded.values = ndimage.gaussian_filter(data_gridded, sigma=2)
-        else: data_gridded.values = ndimage.gaussian_filter(data_gridded, sigma=25)
+        if not self.opts['contour']['ensprod'].startswith('neprob'):
+            logging.info(f"plotContour: latlonGrid")
+            data = self.latlonGrid(data)
 
-        cs2 = self.m.contour(self.x2d, self.y2d, data_gridded, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, ax=self.ax, alpha=alpha)
+        if self.opts['contour']['name'] in ['t2-0c']: data.values = ndimage.gaussian_filter(data, sigma=2)
+        else: data.values = ndimage.gaussian_filter(data, sigma=25)
+
+        cs2 = self.ax.contour(self.x2d, self.y2d, data, levels=self.opts['contour']['levels'], colors='k', linewidths=linewidth, alpha=alpha)
         plt.clabel(cs2, fontsize='small', fmt='%i')
 
     def plotBarbs(self):
@@ -230,23 +241,20 @@ class webPlot:
 
         logging.debug(f"plotBarbs: starting barbs {[x.name for x in self.data['barb']]}")
         # skip interval intended for 2-D fields
-        if len(self.x.shape) == 2:
-            cs2 = self.m.barbs(self.x[::skip,::skip], self.y[::skip,::skip], self.data['barb'][0][::skip,::skip], self.data['barb'][1][::skip,::skip],
-                    alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
-        if len(self.x.shape) == 1:
-            u2d = self.latlonGrid(self.data['barb'][0])
-            v2d = self.latlonGrid(self.data['barb'][1])
-            # rotate vectors so they represent the direction properly on the map projection
-            u10_rot, v10_rot, x, y = self.m.rotate_vector(u2d, v2d, self.lon2d, self.lat2d, returnxy=True)
-            cs2 = self.m.barbs(x[::skip,::skip], y[::skip,::skip], u10_rot[::skip,::skip], v10_rot[::skip,::skip], 
-                    alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, ax=self.ax)
+        u = self.latlonGrid(self.data['barb'][0])[::skip,::skip].values.flatten()
+        v = self.latlonGrid(self.data['barb'][1])[::skip,::skip].values.flatten()
+        x = self.lon2d[::skip,::skip].flatten()
+        y = self.lat2d[::skip,::skip].flatten()
+        # transform orients the barbs properly on projection
+        logging.info(f"plotBarbs: barbs")
+        cs2 = self.ax.barbs(x, y, u, v, alpha=alpha, length=5.5, linewidth=0.25, sizes={'emptybarb':0.05}, transform=cartopy.crs.PlateCarree())
     
     def plotPaintball(self):
        rects, labels = [], []
        colorlist = self.opts['fill']['colors']
        levels = self.opts['fill']['levels']
        for i in range(self.data['fill'][0].shape[0]):
-           cs = self.m.contourf(self.x, self.y, self.data['fill'][0][i,self.ibox], tri=True, levels=levels, colors=[colorlist[i%len(colorlist)]], ax=self.ax, alpha=0.5)
+           cs = self.ax.contourf(self.x, self.y, self.data['fill'][0][i,self.ibox], tri=True, levels=levels, colors=[colorlist[i%len(colorlist)]], alpha=0.5)
            rects.append(plt.Rectangle((0,0),1,1,fc=colorlist[i%len(colorlist)]))
            labels.append("member %d"%(i+1))
 
@@ -260,83 +268,68 @@ class webPlot:
        data = self.data['contour'][0]
        data.values = ndimage.gaussian_filter(data, sigma=[0,4,4])
        for i in range(self.data['contour'][0].shape[0]):
-           #cs = self.m.contour(self.x, self.y, data[i,:], levels=levels, colors=[colorlist[i]], linewidths=2, linestyles='solid', ax=self.ax)
-           cs = self.m.contour(self.x, self.y, data[i,:], levels=levels, colors='k', alpha=0.6, linewidths=1, linestyles='solid', ax=self.ax)
+           cs = self.ax.contour(self.x, self.y, data[i,:], levels=levels, colors='k', alpha=0.6, linewidths=1, linestyles='solid')
            #proxy.append(plt.Rectangle((0,0),1,1,fc=colorlist[i]))
        #plt.legend(proxy, ["member %d"%i for i in range(1,11)], ncol=5, loc='right', bbox_to_anchor=(1.0,-0.05), fontsize=11, \
        #           frameon=False, borderpad=0.25, borderaxespad=0.25, handletextpad=0.2)
 
     def plotStamp(self):
-       fig_width_px, dpi = 1280, 90
-       fig = plt.figure(dpi=dpi)
 
-       num_rows, num_columns = 3, 4
-       fig_width = fig_width_px/dpi
-       width_per_panel = fig_width/float(num_columns)
-       height_per_panel = width_per_panel*self.m.aspect
-       fig_height = height_per_panel*num_rows
-       fig_height_px = fig_height*dpi
-       fig.set_size_inches((fig_width, fig_height))
+        num_rows, num_columns = 3, 4
+        fig, axs = plt.subplots(nrows=num_rows, ncols=num_columns,
+                subplot_kw={'projection':self.ax.projection},
+                figsize=(14,8))
+        fig.subplots_adjust(bottom=0.01, top=0.99, left=0.01, right=0.99, wspace=0.01, hspace=0.01)
 
-       levels = self.opts['fill']['levels']
-       cmap = colors.ListedColormap(self.opts['fill']['colors'])
-       norm = colors.BoundaryNorm(levels, cmap.N)
+        levels = self.opts['fill']['levels']
+        cmap = colors.ListedColormap(self.opts['fill']['colors'])
+        norm = colors.BoundaryNorm(levels, cmap.N)
 
-       memberidx = 0 
-       for j in range(0,num_rows):
-           for i in range(0,num_columns):
-               member = num_columns*j+i
-               if member > 9: break
-               spacing_w, spacing_h = 5/float(fig_width_px), 5/float(fig_height_px)
-               spacing_w = 10/float(fig_width_px)
-               x, y = i*width_per_panel/float(fig_width), 1.0 - (j+1)*height_per_panel/float(fig_height)
-               w, h = (width_per_panel/float(fig_width))-spacing_w, (height_per_panel/float(fig_height))-spacing_h
-               if member == 9: y = 0
+        for member, ax in enumerate(axs.flatten()):
+            ax.add_feature(cartopy.feature.COASTLINE.with_scale('110m'), linewidth=0.25)
+            ax.add_feature(cartopy.feature.BORDERS.with_scale('110m'), linewidth=0.25)
+            ax.add_feature(cartopy.feature.STATES.with_scale('110m'), linewidth=0.05)
+            ax.add_feature(cartopy.feature.LAKES.with_scale('110m'), edgecolor='k', linewidth=0.25, facecolor='k', alpha=0.05)
+            ax.text(0.03,0.97,member+1,ha="left",va="top",bbox=dict(boxstyle="square",lw=0.5,fc="white"), transform=ax.transAxes)
+            # plot, unless file that has fill field is missing, then skip
+            if member not in self.missing_members and member < self.ENS_SIZE:
+                data = self.latlonGrid(self.data['fill'][0].isel(mem=member))
+                logging.debug(f"plotStamp: starting contourf with regridded array member {member}")
+                cs1 = ax.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max')
+                ax.set_extent(self.extent, crs=self.ax.projection)
+            if member >= self.ENS_SIZE:
+                fig.delaxes(ax)
 
-               logging.debug(f'member {member} creating axes at {x},{y}')
-               thisax = fig.add_axes([x,y,w,h])
 
-               thisax.axis('on')
-               for axis in ['top','bottom','left','right']: thisax.spines[axis].set_linewidth(0.5)
-               self.m.drawcoastlines(ax=thisax, linewidth=0.3)
-               self.m.drawstates(linewidth=0.15, ax=thisax)
-               self.m.drawcountries(ax=thisax, linewidth=0.3)
-               thisax.text(0.03,0.97,member+1,ha="left",va="top",bbox=dict(boxstyle="square",lw=0.5,fc="white"), transform=thisax.transAxes)
-               
-               # plot, unless file that has fill field is missing, then skip
-               if member not in self.missing_members and member < self.ENS_SIZE:
-                   data = self.latlonGrid(self.data['fill'][0].isel(mem=memberidx))
-                   logging.debug(f"plotStamp: starting contourf with regridded array member {memberidx}")
-                   cs1 = self.m.contourf(self.x2d, self.y2d, data, levels=levels, cmap=cmap, norm=norm, extend='max', ax=thisax)
-                   memberidx += 1
+        # use every other tick for large colortables, remove last tick label for both
+        if self.opts['fill']['name'] in ['goesch3', 'goesch4', 't2', 'precipacc' ]: ticks = levels[:-1][::2] # CSS added precipacc       
+        else: ticks = levels[:-1] 
 
-       # use every other tick for large colortables, remove last tick label for both
-       if self.opts['fill']['name'] in ['goesch3', 'goesch4', 't2', 'precipacc' ]: ticks = levels[:-1][::2] # CSS added precipacc       
-       else: ticks = levels[:-1] 
+        label = f"{data.long_name} [{data.units}]"
+        # add colorbar to figure
+        cax = fig.add_axes([0.51,0.3,0.48,0.02])
+        cb = plt.colorbar(cs1, cax=cax, orientation='horizontal', ticks=ticks, extendfrac=0.0, label=label)
+        cb.outline.set_linewidth(0.5)
+        cb.ax.tick_params(labelsize=9)
 
-       label = f"{data.long_name} [{data.units}]"
-       # add colorbar to figure
-       cax = fig.add_axes([0.51,0.3,0.48,0.02])
-       cb = plt.colorbar(cs1, cax=cax, orientation='horizontal', ticks=ticks, extendfrac=0.0, label=label)
-       cb.outline.set_linewidth(0.5)
-       cb.ax.tick_params(labelsize=9)
+        # add init/valid text
+        fontdict = {'family':'monospace', 'size':13, 'weight':'bold'}
+        initstr, validstr = self.getInitValidStr() 
 
-       # add init/valid text
-       fontdict = {'family':'monospace', 'size':13, 'weight':'bold'}
-       initstr, validstr = self.getInitValidStr() 
+        fig.text(0.51, 0.22, self.title, fontdict=fontdict, transform=fig.transFigure)
+        pos = axs.flatten()[-2].get_position()
+        fontdict = {'family':'monospace'}
+        fig.text(0.51, pos.y0+0.3*pos.height, " "+initstr+"\n"+validstr, fontdict=fontdict, ha="left", 
+                transform=fig.transFigure)
 
-       fig.text(0.51, 0.22, self.title, fontdict=fontdict, transform=fig.transFigure)
-       fig.text(0.51, 0.22 - 25/float(fig_height_px), initstr, transform=fig.transFigure)
-       fig.text(0.51, 0.22 - 40/float(fig_height_px), validstr, transform=fig.transFigure)
-
-       # add NCAR logo and text below logo
-       x, y = fig.transFigure.transform((0.51,0))
-       fig.figimage(plt.imread('ncar.png'), xo=x, yo=y+15, zorder=1000)
-       #plt.text(x+10, y+5, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
+        # add NCAR logo and text below logo
+        xo, yo = fig.transFigure.transform((0.51,pos.y0))
+        fig.figimage(plt.imread('ncar.png'), xo=xo, yo=yo)
+        #plt.text(x+10, y+5, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
 
 
     def getInitValidStr(self):
-       initstr  = self.initdate.strftime(' Init: %a %Y-%m-%d %H UTC')
+       initstr  = self.initdate.strftime('Init: %a %Y-%m-%d %H UTC')
        shr = min(self.fhr)
        ehr = max(self.fhr)
        fmt = '%a %Y-%m-%d %H UTC'
@@ -345,31 +338,37 @@ class webPlot:
             validstr += " - " + (self.initdate+datetime.timedelta(hours=ehr)).strftime(fmt)
        return initstr, validstr
 
-    def saveFigure(self, trans=False):
+    def saveFigure(self, transparent=False):
+        outfile = self.createFilename()
         # place NCAR logo 57 pixels below bottom of map, then save image 
         if 'ensprod' in self.opts['fill']:  # CSS needed incase not a fill plot
-           if not trans and not self.opts['fill']['ensprod'].endswith('stamp'):
-             x, y = self.ax.transAxes.transform((0,0))
-             self.fig.figimage(plt.imread('ncar.png'), xo=x, yo=(y-44))
-             #plt.text(x+10, y-54, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
+            if not transparent and not self.opts['fill']['ensprod'].endswith('stamp'):
+                img = plt.imread('ncar.png')
+                self.ax.figure.figimage(img, xo=10, yo=10)
+                #plt.text(x+10, y-54, 'ensemble.ucar.edu', fontdict={'size':9, 'color':'#505050'}, transform=None)
 
-        plt.savefig(self.outfile, dpi=90, transparent=trans)
+        self.ax.set_extent(self.extent, crs=self.ax.projection)
+
+        plt.savefig(outfile, transparent=transparent, bbox_inches="tight")
         
         if self.opts['convert']:
-            #command = 'convert -colors 255 %s %s'%(self.outfile, self.outfile)
+            # reduce colors to shrink file size
             if not self.opts['fill']: ncolors = 48 #if no fill field exists
-            elif self.opts['fill']['ensprod'] in ['prob', 'neprob', 'probgt', 'problt', 'neprobgt', 'neproblt']: ncolors = 48
+            elif "prob" in self.opts['fill']['ensprod']: ncolors = 48
             elif self.opts['fill']['name'] in ['crefuh']: ncolors = 48
             else: ncolors = 255
-            #command = '/glade/u/home/sobash/pngquant/pngquant %d %s --ext=.png --force'%(ncolors,self.outfile)
             if os.environ['NCAR_HOST'] == "cheyenne":
                 quant = '/glade/u/home/ahijevyc/bin_cheyenne/pngquant'
             else:
                 quant = '/glade/u/home/ahijevyc/bin/pngquant'
-            command = f"{quant} {ncolors} {self.outfile} --ext=.png --force"
+            beforesize = os.path.getsize(outfile)
+            command = f"{quant} {ncolors} {outfile} --ext=.png --force"
+            logging.info(f"{beforesize} bytes before reducing colors")
+            logging.debug(command)
             ret = subprocess.check_call(command.split())
         plt.clf()
-        logging.info(f"created {self.outfile}")
+        fsize = os.path.getsize(outfile)
+        logging.info(f"created {outfile} {fsize} bytes")
 
 def parseargs():
     '''Parse arguments and return dictionary of fill, contour and barb field parameters'''
@@ -384,11 +383,10 @@ def parseargs():
     parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(list(fieldinfo.keys())))
     parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
     parser.add_argument('--meshstr', type=str, default='uni', help='mesh id or path to defining mesh')
-    parser.add_argument('--nbarbs', type=int, default=50, help='max barbs in one dimension')
+    parser.add_argument('--nbarbs', type=int, default=32, help='max barbs in one dimension')
     parser.add_argument('--nlon_max', type=int, default=1500, help='max pts in longitude dimension')
     parser.add_argument('--nlat_max', type=int, default=1500, help='max pts in latitude dimension')
-    parser.add_argument('--over', default=False, action='store_true', help='plot as overlay (no lines, transparent, no convert)')
-    parser.add_argument('-sig', '--sigma', default=2, help='smooth probabilities using gaussian smoother')
+    parser.add_argument('--sigma', default=2, help='smooth probabilities using gaussian smoother')
     parser.add_argument('-t', '--title', help='title for plot')
 
     opts = vars(parser.parse_args()) # argparse.Namespace in form of dictionary
@@ -434,10 +432,10 @@ def parseargs():
                 thisdict['levels']  = [float(input[2]), 1000]
                 thisdict['colors']  = readNCLcm('GMT_paired') 
             elif (input[1] == 'var'):
-                if (input[0][0:3] == 'hgt'):
+                if input[0].startswith('hgt'):
                     thisdict['levels']  = [2,4,6,8,10,15,20,25,30,35,40,45,50,55,60,65,70,75] #hgt 
                     thisdict['colors']  = readNCLcm('wind_17lev')
-                elif (input[0][0:3] == 'spe'):
+                elif input[0].startswith('spe'):
                     thisdict['levels']  = [1,2,3,4,5,6,7,8,9,10,12.5,15,20,25,30,35,40,45] #iso
                     thisdict['colors']  = readNCLcm('wind_17lev')
                 else:
@@ -484,10 +482,10 @@ def readEnsemble(Plot):
         
         # save some variables for use in this function
         arrays = fields[f]['arrayname']
-        fieldtype = fields[f]['ensprod']
+        ensprod = fields[f]['ensprod']
         fieldname = fields[f]['name']
-        if fieldtype in ['prob', 'neprob', 'problt', 'probgt', 'neprobgt', 'neproblt', 'prob3d']: thresh = fields[f]['thresh']
-        if fieldtype.startswith('mem'): member = int(fieldtype[3:])
+        if ensprod in ['prob', 'neprob', 'problt', 'probgt', 'neprobgt', 'neproblt', 'prob3d']: thresh = fields[f]['thresh']
+        if ensprod.startswith('mem'): member = int(ensprod[3:])
         
         # open xarray Dataset
         logging.info(f"opening xarray Dataset. {len(fhr)} forecast hours x {ENS_SIZE} members")
@@ -577,38 +575,57 @@ def readEnsemble(Plot):
                 data = ensemble_at_last_time # use last time for output data
                 data.data -= ensemble_at_first_time.data # .data preserves quantity units, metadata, avoids pint.errors.DimensionalityError: Cannot convert from 'dimensionless' to 'inch'
 
-            logging.info(f"perform {fieldtype} on {data.shape} data")
-            if (fieldtype == 'mean'):
+            logging.info(f"get {ensprod} of {data.shape} data")
+            if (ensprod == 'mean'):
                 data = data.mean(dim=["Time","mem"], keep_attrs=True)
-            elif (fieldtype == 'pmm'): 
+            elif (ensprod == 'pmm'): 
                 data = compute_pmm(data)
-            elif (fieldtype == 'max'):
+            elif (ensprod == 'max'):
                 data = data.max(dim=["Time","mem"], keep_attrs=True)
-            elif (fieldtype == 'min'):
+            elif (ensprod == 'min'):
                 data = data.min(dim=["Time","mem"], keep_attrs=True)
-            elif (fieldtype == 'var'):
+            elif (ensprod == 'var'):
                 data = data.std(dim=["Time","mem"], keep_attrs=True)
-            elif (fieldtype == 'maxstamp'):
+            elif (ensprod == 'maxstamp'):
                 data = data.max(dim="Time", keep_attrs=True)
-            elif (fieldtype == 'meanstamp'):
+            elif (ensprod == 'meanstamp'):
                 data = data.mean(dim="Time", keep_attrs=True)
-            elif (fieldtype == 'summean'):
+            elif (ensprod == 'summean'):
                 data = data.sum(dim="Time", keep_attrs=True)
                 data = data.mean(dim="mem", keep_attrs=True)
-            elif (fieldtype == 'maxmean'):
+            elif (ensprod == 'maxmean'):
                 data = data.max(dim="Time", keep_attrs=True)
                 data = data.mean(dim="mem", keep_attrs=True)
-            elif (fieldtype == 'summax'):
+            elif (ensprod == 'summax'):
                 data = data.sum(dim="Time", keep_attrs=True)
                 data = data.max(dim="mem", keep_attrs=True)
-            elif (fieldtype[0:3] == 'mem'):
+            elif (ensprod[0:3] == 'mem'):
                 data = data.sel(mem=member)
-            elif 'prob' in fieldtype:
-                if fieldtype.endswith('prob') or fieldtype.endswith('gt'): data = (data>=thresh).astype('float')
-                elif fieldtype.endswith('lt'): data = (data<thresh).astype('float')
-            elif (fieldtype in ['prob3d']):
-                data = (data>=thresh).astype('float')
-                data = compute_prob3d(data, roi=14, sigma=float(fields['sigma']), type='gaussian')
+            elif 'prob' in ensprod:
+                u = data.metpy.units
+                if ensprod.endswith('lt'):
+                    data.values = data.values < thresh
+                    data.attrs["long_name"] = "less than {thresh} {u}"
+                else:
+                    data.values = data.values >= thresh
+                    data.attrs["long_name"] = f"greater than or equal to {thresh} {u}"
+                if ensprod.startswith("ne"):
+                    # grid spacing of interpolated lat-lon grid.
+                    grid_spacing = units.km * np.sqrt(Plot.mpas_mesh["areaCell"].values.min())/1000
+                    nbrhd = 25 * units.miles
+                    roi = nbrhd / grid_spacing
+                    roi = roi.to_base_units()
+                    logging.info(f"compute neighborhood probability with radius {roi:.2f}")
+                    data = data.stack(TimeMem=("Time","mem")).groupby("TimeMem").apply(Plot.latlonGrid)
+                    data = compute_neprob(data, roi=roi, sigma=float(Plot.opts['sigma']), type='gaussian')
+                    data = data.unstack()
+                    data.attrs["long_name"] += f" within {nbrhd:~}"
+                data = data.mean(dim=["Time","mem"], keep_attrs=True)
+                data.attrs["long_name"] = "probability " + data.attrs["long_name"]
+                data.attrs["units"] = "dimensionless"
+            elif (ensprod in ['prob3d']):
+                data = (data.values>=thresh).astype('float')
+                data = compute_prob3d(data, roi=14, sigma=float(Plot.opts['sigma']), type='gaussian')
             logging.debug(f'field {fieldname} has shape {data.shape} range {data.min()}-{data.min()}')
 
             datadict[f].append(data)
@@ -619,89 +636,87 @@ def readEnsemble(Plot):
 
 
 
-def saveNewMap(plot, pk_file):
-    logging.info(f"saveNewMap: pk_file={pk_file}")
+def saveNewMap(plot):
+    logging.info(f"saveNewMap: pk_file={plot.pk_file}")
     ll_lat, ll_lon, ur_lat, ur_lon = domains[plot.domain]['corners']
     lat_1, lat_2, lon_0 = 32., 46., -101.
-    fig_width = 1080
-    dpi = 90 
-    fig = plt.figure(dpi=dpi)
-    m = Basemap(projection='lcc', resolution='i', llcrnrlon=ll_lon, llcrnrlat=ll_lat, urcrnrlon=ur_lon, urcrnrlat=ur_lat, \
-                lat_1=lat_1, lat_2=lat_2, lon_0=lon_0, area_thresh=1000)
+    fig = plt.figure()
+    
+    proj = cartopy.crs.LambertConformal(central_longitude=lon_0, standard_parallels=(lat_1,lat_2))
+    (llx, lly, llz), (urx, ury, urz) = proj.transform_points(
+            cartopy.crs.PlateCarree(), 
+            np.array([ll_lon, ur_lon]), 
+            np.array([ll_lat, ur_lat])
+            )
+    ul_lon, ul_lat = cartopy.crs.PlateCarree().transform_point(llx, ury, proj)
+    lr_lon, lr_lat = cartopy.crs.PlateCarree().transform_point(urx, lly, proj)
+    lc_lon, lc_lat = cartopy.crs.PlateCarree().transform_point(0, lly, proj)
+    uc_lon, uc_lat = cartopy.crs.PlateCarree().transform_point(0, ury, proj)
 
-    # compute height based on figure width, map aspect ratio, then add some vertical space for labels/colorbar
-    fig_width  = fig_width/float(dpi)
-    fig_height = fig_width*m.aspect + 0.93
-    figsize = (fig_width, fig_height)
-    fig.set_size_inches(figsize)
+    # To save time, triangulate within a lat/lon bounding box.
+    # Get extreme longitudes and latitudes within domain so the entire domain is covered.
+    # These were attributes of Basemap object, but not cartopy.
+    # Extreme longitudes are probably in upper left and upper right corners, but also check lower corners.
+    lonmin = min([ll_lon, ul_lon])
+    lonmax = max([lr_lon, ur_lon])
+    # Extreme latitudes are probably in lower center and upper center (lc_lat, uc_lat).
+    latmin = min([ll_lat, lc_lat, lr_lat])
+    latmax = max([ul_lat, uc_lat, ur_lat])
 
-    # place map 0.7" from bottom of figure, leave rest of 0.93" at top for title (needs to be in figure-relative coords)
-    x,y,w,h = 0.01, 0.7/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height)
-    ax = fig.add_axes([x,y,w,h])
+    extent = (llx, urx, lly, ury) # in projection coordinates (x,y) meters
+
+    # y/x aspect ratio was an attribute of Basemap object, but not cartopy.
+    aspect = (ury - lly) / (urx - llx)
+
+    # Constant figure width, no matter the aspect ratio.
+    fig.set_size_inches(16,16*aspect)
+
+    ax = plt.axes(projection = proj)
     for i in list(ax.spines.values()): i.set_linewidth(0.5)
 
-    m.drawcoastlines(linewidth=0.5, ax=ax)
-    m.drawstates(linewidth=0.25, ax=ax)
-    m.drawcountries(ax=ax)
-    m.drawcounties(linewidth=0.1, color='gray', ax=ax)
+    ax.add_feature(cartopy.feature.COASTLINE.with_scale('50m'), linewidth=0.25)
+    ax.add_feature(cartopy.feature.BORDERS.with_scale('50m'), linewidth=0.25)
+    ax.add_feature(cartopy.feature.STATES.with_scale('50m'), linewidth=0.05)
+    ax.add_feature(cartopy.feature.LAKES.with_scale('50m'), edgecolor='k', linewidth=0.25, facecolor='k', alpha=0.05)
+    if plot.domain != "CONUS":
+        logging.debug("draw counties")
+        # Create custom cartopy feature COUNTIES that can be added to the axes.
+        reader = cartopy.io.shapereader.Reader('/glade/work/ahijevyc/share/shapeFiles/cb_2013_us_county_500k/cb_2013_us_county_500k.shp')
+        counties = list(reader.geometries())
+        COUNTIES = cartopy.feature.ShapelyFeature(counties, cartopy.crs.PlateCarree())
+        ax.add_feature(COUNTIES, facecolor="none", linewidth=0.1, alpha=0.25)
 
     # lat/lons from mpas_mesh file
     mpas_mesh = plot.mpas_mesh
-    # min_grid_spacing_km used for grid spacing of interpolated lat-lon grid.
-    min_grid_spacing_km = 2. * np.sqrt(plot.mpas_mesh["areaCell"].min()/np.pi)/1000
+    # min_grid_spacing is the grid spacing of interpolated lat-lon grid in meters.
+    min_grid_spacing = np.sqrt(plot.mpas_mesh["areaCell"].values.min())
 
     lats = mpas_mesh["latCell"]
     lons = mpas_mesh["lonCell"]
-    delta_deg = min_grid_spacing_km / 111
     if lons.max() > 180:
         lons[lons>180] -= 360
-    # Replace m.lonmax with ur_lon? Otherwise, risk getting +179.999 when NW corner crosses the datetime
-    nlon = int((m.lonmax - m.lonmin)/delta_deg)
-    nlat = int((m.latmax - m.latmin)/delta_deg)
+    nlon = int((urx - llx)/min_grid_spacing) # calculate in projection space (meters)
+    nlat = int((ury - lly)/min_grid_spacing)
     nlon = np.clip(nlon, 1, plot.nlon_max)
     nlat = np.clip(nlat, 1, plot.nlat_max)
-    lon2d, lat2d = np.meshgrid(np.linspace(m.lonmin, m.lonmax, nlon), np.linspace(m.latmin,m.latmax,nlat))
-    # Convert to map coordinates instead of latlon to avoid latlon=True in contour and barb methods.
-    x2d, y2d = m(lon2d,lat2d)
-    # ibox: subscripts within lat/lon box. speed up triangulation in interp_weights
-    ibox = (m.lonmin-1 <= lons ) & (lons < m.lonmax+1) & (m.latmin-1 <= lats) & (lats < m.latmax+1)
+    lon2d, lat2d = np.meshgrid(np.linspace(lonmin, lonmax, nlon), np.linspace(latmin,latmax,nlat))
+    # Convert to map coordinates instead of latlon to avoid transform=PlateCarree in contour method.
+    xyz = proj.transform_points(cartopy.crs.PlateCarree(), lon2d, lat2d)
+    x2d = xyz[...,0]
+    y2d = xyz[...,1]
+    # ibox: subscripts within lat/lon box plus buffer. speed up triangulation in interp_weights
+    ibox = (lonmin-1 <= lons ) & (lons < lonmax+1) & (latmin-1 <= lats) & (lats < latmax+1)
     lons = lons[ibox]
     lats = lats[ibox]
-    x, y = m(lons,lats)
+    xyz = proj.transform_points(cartopy.crs.PlateCarree(), lons, lats)
+    x = xyz[...,0]
+    y = xyz[...,1]
 
-    logging.debug(f"saveNewMap: triangulate {len(lons)} pts")
+    logging.info(f"saveNewMap: triangulate {len(lons)} pts")
     vtx, wts = interp_weights(np.vstack((lons,lats)).T,np.vstack((lon2d.flatten(), lat2d.flatten())).T)
 
-    pickle.dump((fig,ax,m,lons,lats,delta_deg,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open(pk_file, 'wb'))
+    pickle.dump((ax,extent,lons,lats,lon2d,lat2d,x2d,y2d,ibox,x,y,vtx,wts), open(plot.pk_file, 'wb'))
     
-
-
-def drawOverlay(plot, pk_file):
-    logging.info(f"drawOverlay: pk_file={pk_file}")
-    ll_lat, ll_lon, ur_lat, ur_lon = domains[plot.domain]['corners']
-    lat_1, lat_2, lon_0 = 32., 46., -101.
-    fig_width = 1080
-    dpi = 90 
-    fig = plt.figure(dpi=dpi)
-    m = Basemap(projection='lcc', resolution='i', llcrnrlon=ll_lon, llcrnrlat=ll_lat, urcrnrlon=ur_lon, urcrnrlat=ur_lat, \
-                lat_1=lat_1, lat_2=lat_2, lon_0=lon_0, area_thresh=1000)
-
-    # compute height based on figure width, map aspect ratio, then add some vertical space for labels/colorbar
-    fig_width  = fig_width/float(dpi)
-    fig_height = fig_width*m.aspect + 0.93
-    figsize = (fig_width, fig_height)
-    fig.set_size_inches(figsize)
-
-    # place map 0.7" from bottom of figure, leave rest of 0.93" at top for title (needs to be in figure-relative coords)
-    x,y,w,h = 0.01, 0.7/float(fig_height), 0.98, 0.98*fig_width*m.aspect/float(fig_height)
-    ax = fig.add_axes([x,y,w,h])
-
-    #drawcounties doesnt work when called by itself? so have to drawcoastines first with lw=0
-    m.drawcoastlines(linewidth=0, ax=ax)
-    m.drawcounties(ax=ax)
-    ax.axis('off')
-    plt.savefig('overlay_counties_%s.png'%domain, dpi=90, transparent=True)
-
 def compute_pmm(ensemble):
     members = ensemble.Time.size
     ens_mean = ensemble.mean(dim="Time", keep_attrs=True)
@@ -719,26 +734,24 @@ def compute_pmm(ensemble):
     return ens_mean
 
 def compute_neprob(ensemble, roi=0, sigma=0.0, type='gaussian'):
-    if len(ensemble.shape) < 3:
-        logging.error('compute_neprob: needs ensemble of 2D arrays, not 1D arrays')
-        sys.exit(1)
+    roi = np.rint(roi) # round to nearest integer
+    assert len(ensemble.dims) >= 3, 'compute_neprob: needs ensemble of 2D arrays, not 1D arrays'
     y,x = np.ogrid[-roi:roi+1, -roi:roi+1]
     kernel = x**2 + y**2 <= roi**2
     ens_roi = ndimage.filters.maximum_filter(ensemble, footprint=kernel[np.newaxis,:])
 
-    ens_mean = np.nanmean(ens_roi, axis=0)
-    #ens_mean = np.nanmean(ensemble, axis=0)
-
     if type == 'uniform':
         y,x = np.ogrid[-sigma:sigma+1, -sigma:sigma+1]
         kernel = x**2 + y**2 <= sigma**2
-        ens_mean = ndimage.filters.convolve(ens_mean, kernel/float(kernel.sum()))
+        smoothed = ndimage.filters.convolve(ens_roi, kernel/float(kernel.sum()))
     elif type == 'gaussian':
-        ens_mean = ndimage.filters.gaussian_filter(ens_mean, sigma)
+        # smooth last 2 dimensions (not TimeMember dimension)
+        smoothed = ndimage.filters.gaussian_filter(ens_roi, (0,sigma,sigma))
     else:
         logging.error(f"compute_neprob: unknown filter {type}")
         sys.exit(1)
-    return ens_mean
+    ensemble.values = smoothed
+    return ensemble
 
 def compute_prob3d(ensemble, roi=0, sigma=0.):
     logging.info(f"compute_prob3d: roi={roi} sigma={sigma}")
