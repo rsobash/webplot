@@ -380,7 +380,9 @@ def parseargs():
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-con', '--convert', default=True, action='store_false', help='run final image through imagemagick')
     parser.add_argument('-d', '--debug', action='store_true', help='turn on debugging')
-    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), field keys:'+','.join(list(fieldinfo.keys())))
+    parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), FIELD options:'
+            f"{','.join(list(fieldinfo.keys()))} PRODUCT may be one of [max,maxstamp,min,mean,meanstamp,"
+            "prob,neprob,problt,neproblt,paintball,stamp,spaghetti]")
     parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
     parser.add_argument('--meshstr', type=str, default='uni', help='mesh id or path to defining mesh')
     parser.add_argument('--nbarbs', type=int, default=32, help='max barbs in one dimension')
