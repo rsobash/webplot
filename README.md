@@ -20,12 +20,12 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --autolevels          use min/max to determine levels for plot
-  -b BARB, --barb BARB  barb field (FIELD_PRODUCT_THRESH)
+  -b BARB, --barb BARB  barb field (FIELD/PRODUCT/THRESH)
   -c CONTOUR, --contour CONTOUR
-                        contour field (FIELD_PRODUCT_THRESH)
+                        contour field (FIELD/PRODUCT/THRESH)
   -con, --convert       run final image through imagemagick
   -d, --debug           turn on debugging
-  -f FILL, --fill FILL  fill field (FIELD_PRODUCT_THRESH), field keys:precip,precip-24hr,precip-
+  -f FILL, --fill FILL  fill field (FIELD/PRODUCT/THRESH), field keys:precip,precip-24hr,precip-
                         48hr,precipacc,sbcape,mlcape,mucape,sbcinh,mlcinh,pwat,t2,t2depart,t2-
                         0c,mslp,td2,td2depart,thetae,thetapv,rh2m,pblh,hmuh,hmneguh,hmuh03,hmuh01,rvort1,sspf,hmup
                         ,hmdn,hmwind,hmgrp,cref,ref1km,srh3,srh1,shr06mag,shr01mag,zlfc,zlcl,ltg1,ltg2,ltg3,olrtoa
