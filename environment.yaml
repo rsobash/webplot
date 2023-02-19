@@ -1,0 +1,12 @@
+name: webplot
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - pygrib
+  - scipy
+  - xarray
+  - netcdf4
+  - dask
+  - metpy
+prefix: /glade/u/home/ahijevyc/miniconda3/envs/webplot
