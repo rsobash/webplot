@@ -6,7 +6,8 @@ For example, to plot max precipitation accumulation, mean 500hPa vorticity, and 
 from forecast hours [12, 18]:
 
 ```
-python webplot.py 20180619 --fill precipacc/max --fhr 12 18 --contour vort500/mean --barb wind500/mean --title 'max precip accumuation, mean 500hPa vort, mean 500hPa wind barbs'
+python webplot.py 20180619 --fill precipacc/max --fhr 12 18 --contour vort500/mean \
+    --barb wind500/mean --title 'max precip accumuation, mean 500hPa vort, mean 500hPa wind barbs'
 ```
 
 MPAS initialization time provided as first argument.
