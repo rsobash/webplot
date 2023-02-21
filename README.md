@@ -3,16 +3,16 @@
 create graphics from MPAS ensemble
 
 For example, to plot max precipitation accumulation, mean 500hPa vorticity, and mean wind barbs 
-from the valid period [2017061912, 2017061918]:
+from forecast hours [12, 18]:
 
-```
-python webplot.py 20170619 --fill precipacc/max --fhr 12 18 --contour vort500/mean --barb wind500/mean
+```python
+python webplot.py 20180619 --fill precipacc/max --fhr 12 18 --contour vort500/mean --barb wind500/mean
     --title 'max precip accumuation, mean 500hPa vort, mean 500hPa wind barbs'
 ```
 
 MPAS initialization time provided as first argument.
 
-```
+```python
 usage: webplot.py [-h] [--autolevels] [-b BARB] [-c CONTOUR] [-con] [-d]
                   [--domain {CONUS,NA,SGP,NGP,CGP,SW,NW,SE,NE,MATL}] [-f FILL] [--fhr FHR [FHR ...]]
                   [--meshstr MESHSTR] [--nbarbs NBARBS] [--nlon_max NLON_MAX] [--nlat_max NLAT_MAX]
