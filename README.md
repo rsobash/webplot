@@ -1,6 +1,6 @@
 # webplot plotting package
 
-create graphics from MPAS ensemble
+### create graphics from MPAS ensemble
 
 For example, to plot max precipitation accumulation with contours of 500hPa mean height, and 
 mean 500hPa wind barbs from forecast hours [12, 18]:
@@ -60,7 +60,6 @@ options:
 
 ### Installation
 
-Use environment.yaml to create conda environment.
+Create conda environment described in environment.yaml.
 
 Use f2py3 to install vert2cell.
-
