@@ -2,12 +2,12 @@
 
 create graphics from MPAS ensemble
 
-For example, to plot max precipitation accumulation, mean 500hPa vorticity, and mean wind barbs 
-from forecast hours [12, 18]:
+For example, to plot max precipitation accumulation with contours of 500hPa mean height, and 
+mean 500hPa wind barbs from forecast hours [12, 18]:
 
 ```
-python webplot.py 20180619 --fill precipacc/max --fhr 12 18 --contour vort500/mean \
-    --barb wind500/mean --title 'max precip accumuation, mean 500hPa vort, mean 500hPa wind barbs'
+python webplot.py 20180619 --fill precipacc/max --fhr 12 18 --contour hgt500/mean \
+    --barb wind500/mean --title 'Max precip acc, mean 500hPa hgt [m] and wind barbs [kt]'
 ```
 
 MPAS initialization time provided as first argument.
