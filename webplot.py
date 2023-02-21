@@ -39,6 +39,7 @@ class webPlot:
         self.debug = self.opts['debug']
         self.domain = self.opts['domain']
         self.fhr = self.opts['fhr']
+        self.idir = self.opts['idir']
         self.meshstr = self.opts['meshstr']
         self.nbarbs = self.opts['nbarbs']
         self.nlat_max = self.opts['nlat_max']
@@ -107,16 +108,17 @@ class webPlot:
     def plotTitleTimes(self):
         fontdict = {'family':'monospace', 'size':12, 'weight':'bold'}
 
-        # place title and times above corners of map
-        x0, y1 = self.ax.transAxes.transform((0,1))
-        x0, y0 = self.ax.transAxes.transform((0,0))
-        x1, y1 = self.ax.transAxes.transform((1,1))
-        self.ax.text(x0, y1+10, self.title, fontdict=fontdict, transform=None)
+        # place title and times above plot
+        verticalalignment="bottom"
+        self.ax.text(0, 1, self.title, fontdict=fontdict, horizontalalignment='left',
+                verticalalignment=verticalalignment, transform=self.ax.transAxes, wrap=True)
 
+        logging.info(self.title)
         fontdict = {'family':'monospace'}
         initstr, validstr = self.getInitValidStr()
+        logging.info(initstr+"\n"+validstr)
         self.ax.text(1, 1, initstr+"\n"+validstr, fontdict=fontdict, horizontalalignment='right', 
-                verticalalignment="bottom", transform=self.ax.transAxes)
+                verticalalignment=verticalalignment, transform=self.ax.transAxes)
 
         # Plot missing members 
         if len(self.missing_members):
@@ -374,8 +376,9 @@ class webPlot:
 def parseargs():
     '''Parse arguments and return dictionary of fill, contour and barb field parameters'''
 
-    parser = argparse.ArgumentParser(description='Web plotting script for NCAR ensemble')
-    parser.add_argument('date', help='initialization datetime')
+    parser = argparse.ArgumentParser(description='Web plotting script for NCAR ensemble',
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('date', help='model initialization time')
     parser.add_argument('--autolevels', action='store_true', help='use min/max to determine levels for plot')
     parser.add_argument('-b', '--barb', help='barb field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
@@ -386,7 +389,10 @@ def parseargs():
             f"{','.join(list(fieldinfo.keys()))} PRODUCT may be one of [max,maxstamp,min,mean,meanstamp,"
             "prob,neprob,problt,neproblt,paintball,stamp,spaghetti]")
     parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
-    parser.add_argument('--meshstr', type=str, default='uni', help='mesh id or path to defining mesh')
+    parser.add_argument('--idir', type=str, default='/glade/campaign/mmm/parc/schwartz/MPAS_ensemble_paper',
+            help="path to model output")
+    parser.add_argument('--meshstr', type=str, default='15km_mesh', 
+            help=f'mesh id {list(mesh_config.keys())} or path to file with lat/lon/area of mesh')
     parser.add_argument('--nbarbs', type=int, default=32, help='max barbs in one dimension')
     parser.add_argument('--nlon_max', type=int, default=1500, help='max pts in longitude dimension')
     parser.add_argument('--nlat_max', type=int, default=1500, help='max pts in latitude dimension')

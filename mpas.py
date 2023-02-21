@@ -64,6 +64,7 @@ mesh_config = {
 
 
 def makeEnsembleList(Plot):
+    idir = Plot.idir
     initdate = Plot.initdate
     fhr = Plot.fhr
     ENS_SIZE = Plot.ENS_SIZE
@@ -76,7 +77,7 @@ def makeEnsembleList(Plot):
         validstr = (initdate + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
         yyyymmddhh = initdate.strftime('%Y%m%d%H')
         for mem in range(1,ENS_SIZE+1):
-            diag   = f'/glade/campaign/mmm/parc/schwartz/MPAS_ensemble_paper/{meshstr}/{yyyymmddhh}/ens_{mem}/diag.{validstr}.nc'
+            diag   = os.path.join(idir, f"{meshstr}/{yyyymmddhh}/ens_{mem}/diag.{validstr}.nc")
             logging.debug(diag)
             if os.path.exists(diag): file_list.append(diag)
             else: 
