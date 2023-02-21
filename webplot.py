@@ -31,13 +31,13 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 class webPlot:
     '''A class to plot data from NCAR ensemble'''
-    def __init__(self, domain=None):
+    def __init__(self):
         self.opts = parseargs()
         self.initdate = pd.to_datetime(self.opts['date'])
         self.ENS_SIZE = self.opts['ENS_SIZE']
         self.autolevels = self.opts['autolevels']
         self.debug = self.opts['debug']
-        self.domain = domain
+        self.domain = self.opts['domain']
         self.fhr = self.opts['fhr']
         self.meshstr = self.opts['meshstr']
         self.nbarbs = self.opts['nbarbs']
@@ -50,6 +50,7 @@ class webPlot:
         self.data, self.missing_members = readEnsemble(self)
         self.plotFields()
         self.plotTitleTimes()
+        self.saveFigure()
  
     def createFilename(self):
         for f in ['fill', 'contour','barb']: # CSS added this for loop and everything in it
@@ -380,6 +381,7 @@ def parseargs():
     parser.add_argument('-c', '--contour', help='contour field (FIELD_PRODUCT_THRESH)')
     parser.add_argument('-con', '--convert', default=True, action='store_false', help='run final image through imagemagick')
     parser.add_argument('-d', '--debug', action='store_true', help='turn on debugging')
+    parser.add_argument('--domain', type=str, choices=domains.keys(), default="CONUS", help='domain of plot')
     parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), FIELD options:'
             f"{','.join(list(fieldinfo.keys()))} PRODUCT may be one of [max,maxstamp,min,mean,meanstamp,"
             "prob,neprob,problt,neproblt,paintball,stamp,spaghetti]")
@@ -852,3 +854,7 @@ def computefrzdepth(t):
     frz_at_surface = np.where(t[0,:] < 33, True, False) #pts where surface T is below 33F
     max_column_t = np.amax(t, axis=0)
     above_frz_aloft = np.where(max_column_t > 32, True, False) #pts where max column T is above 32F
+
+if __name__ == "__main__":
+    webPlot()
+
