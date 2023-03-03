@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os # for NCARG_ROOT
 import numpy as np
 tenths = np.arange(0.1,1.1,0.1)
@@ -5,8 +6,7 @@ fifths = np.arange(0.2,1.2,0.2)
 
 def readcm(name):
     '''Read colormap from file formatted as 0-1 RGB CSV'''
-    projdir = '/glade/u/home/wrfrt/wwe/python_scripts/'
-    fh = open(projdir+name, 'r')
+    fh = open(name, 'r')
     rgb = np.loadtxt(fh)
     fh.close()
     return rgb.tolist()
@@ -28,11 +28,14 @@ def readNCLcm(name):
     return rgb.tolist()
 
 
-fieldinfo = {
+dd = dict(levels=range(10), cmap=readNCLcm('prcp_1'), fname=[], filename='diag')
+fieldinfo = defaultdict(lambda:dd)
+
+fieldinfo.update({
   # surface and convection-related entries
   'precip'       :{ 'levels' : [0,0.01,0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,1.5,2,2.5,3.0], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15)], 'fname':['rainnc'], 'filename':'diag' },
-  'precip-24hr'  :{ 'levels' : [0,0.01,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15,16,17)]+['#777777', '#AAAAAA', '#CCCCCC', '#EEEEEE']+[readNCLcm('sunshine_diff_12lev')[i] for i in (4,2,1)], 'fname':['rainnc'], 'filename':'diag' },
-  'precip-48hr'  :{ 'levels' : [0,0.01,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15,16,17)]+['#777777', '#AAAAAA', '#CCCCCC', '#EEEEEE']+[readNCLcm('sunshine_diff_12lev')[i] for i in (4,2,1)], 'fname':['rainnc'], 'filename':'diag' },
+  'precip-24hr'  :{ 'levels' : [0,0.01,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12,13], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15,16,17)]+['#777777', '#AAAAAA', '#CCCCCC', '#EEEEEE']+[readNCLcm('sunshine_diff_12lev')[i] for i in (4,2,1)], 'fname':['rainnc'], 'filename':'diag' },
+  'precip-48hr'  :{ 'levels' : [0,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20,25], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15,16,17)]+['#777777', '#AAAAAA', '#CCCCCC', '#EEEEEE']+[readNCLcm('sunshine_diff_12lev')[i] for i in (4,2,1)], 'fname':['rainnc'], 'filename':'diag' },
   'precipacc'    :{ 'levels' : [0,0.01,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0], 'cmap': [readNCLcm('precip2_17lev')[i] for i in (0,1,2,4,5,6,7,8,10,12,13,14,15,16,17)]+['#777777', '#AAAAAA', '#CCCCCC', '#EEEEEE']+[readNCLcm('sunshine_diff_12lev')[i] for i in (4,2,1)], 'fname':['rainnc'], 'filename':'diag' },
   'sbcape'       :{ 'levels' : [100,250,500,750,1000,1250,1500,1750,2000,2500,3000,3500,4000,4500,5000,5500,6000],
                     'cmap'   : ['#eeeeee', '#dddddd', '#cccccc', '#aaaaaa']+readNCLcm('precip2_17lev')[3:-1], 'fname': ['sbcape'], 'filename':'diag' },
@@ -60,7 +63,7 @@ fieldinfo = {
   'pblh'         :{ 'levels' : [0,250,500,750,1000,1250,1500,1750,2000,2500,3000,3500,4000],
       'cmap': ['#eeeeee', '#dddddd', '#cccccc', '#bbbbbb', '#44aaee','#88bbff', '#aaccff', '#bbddff', '#efd6c1', '#e5c1a1', '#eebb32', '#bb9918'], 'fname': ['hpbl'], 'filename': 'diag'},
   'hmuh'         :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['updraft_helicity_max'], 'filename':'diag'},
-  'hmneguh'         :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['UP_HELI_MIN'], 'filename':'diag'},
+  'hmneguh'      :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['UP_HELI_MIN'], 'filename':'diag'},
   'hmuh03'       :{ 'levels' : [10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['updraft_helicity_max03'], 'filename':'diag'},
   'hmuh01'       :{ 'levels' : [5,10,25,50,75,100,125,150,175,200,250,300,400,500], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['updraft_helicity_max01'], 'filename':'diag'},
   'rvort1'       :{ 'levels' : [0.005,0.006,0.007,0.008,0.009,0.01,0.011,0.012,0.013,0.014,0.015], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['rvort1_max'], 'filename':'diag'},
@@ -73,8 +76,8 @@ fieldinfo = {
   #'hmwind'       :{ 'levels' : [10,12,14,16,18,20,22,24,26,28,30,32,34], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['WSPD10MAX'], 'filename':'diag' },
   #'hmwind'       :{ 'levels' : [20,25,30,35,40,45,50,55,60,65,70,75,80,85], 'cmap': readNCLcm('prcp_1')[1:16], 'fname': ['WSPD10MAX'], 'filename':'diag' },
   'hmgrp'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1.0,1.5,2.0,2.5,3.0,4.0,5.0], 'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['grpl_max'], 'filename':'diag' },
-  'cref'         :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('cmap_rad.rgb')[1:14], 'fname': ['refl10cm_max'], 'filename':'diag' },
-  'ref1km'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('cmap_rad.rgb')[1:14], 'fname': ['refl10cm_1km'], 'filename':'diag' },
+  'cref'         :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_rad.rgb')[1:14], 'fname': ['refl10cm_max'], 'filename':'diag' },
+  'ref1km'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_rad.rgb')[1:14], 'fname': ['refl10cm_1km'], 'filename':'diag' },
   'srh3'         :{ 'levels' : [50,100,150,200,250,300,400,500], 'cmap': readNCLcm('perc2_9lev'), 'fname': ['srh_0_3km'], 'filename' : 'diag' },
   'srh1'         :{ 'levels' : [50,100,150,200,250,300,400,500], 'cmap': readNCLcm('perc2_9lev'), 'fname': ['srh_0_1km'], 'filename' : 'diag' },
   'shr06mag'     :{ 'levels' : [30,35,40,45,50,55,60,65,70,75,80], 'cmap': readNCLcm('perc2_9lev'), 'fname': ['uzonal_6km', 'umeridional_6km', 'uzonal_surface', 'umeridional_surface'], 'filename':'diag'},
@@ -84,7 +87,7 @@ fieldinfo = {
   'ltg1'         :{ 'levels' : [0.1,0.5,1,1.5,2,2.5,3,4,5,6,7,8,10,12], 'cmap': readNCLcm('prcp_1')[:15], 'fname': ['LTG1_MAX'], 'filename':'diag' },
   'ltg2'         :{ 'levels' : [0.1,0.5,1,1.5,2,2.5,3,4,5,6,7,8,10,12], 'cmap': readNCLcm('prcp_1')[:15], 'fname': ['LTG2_MAX'], 'filename':'diag' },
   'ltg3'         :{ 'levels' : [0.1,0.5,1,1.5,2,2.5,3,4,5,6,7,8,10,12], 'cmap': readNCLcm('prcp_1')[:15], 'fname': ['LTG3_MAX'], 'filename':'diag' },
-  'olrtoa'       :{ 'levels' : range(70,340,10), 'cmap': readcm('cmap_satir.rgb')[32:1:-1], 'fname': ['olrtoa'], 'filename':'diag' },
+  'olrtoa'       :{ 'levels' : range(70,340,10), 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_satir.rgb')[32:1:-1], 'fname': ['olrtoa'], 'filename':'diag' },
 
   # winter fields
   'thck1000-500' :{ 'levels' : [480,486,492,498,504,510,516,522,528,534,540,546,552,558,564,570,576,582,588,592,600], 'cmap':readNCLcm('perc2_9lev'), 'fname':['GHT_PL', 'GHT_PL'], 'arraylevel':[0,5], 'filename':'diag'}, # CSS mod
@@ -129,7 +132,7 @@ fieldinfo = {
  'speed10m-tc'  :{ 'levels' : [6,12,18,24,30,36,42,48,54,60,66,72,78,84,90,96,102], 'cmap': readNCLcm('wind_17lev')[1:],'fname'  : ['u10', 'v10'], 'filename':'diag'},
  'stp'          :{ 'levels' : [0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0], 'cmap':readNCLcm('perc2_9lev'), 'fname':['sbcape','lcl','srh_0_1km','uzonal_6km','umeridional_6km','uzonal_surface','umeridional_surface'], 'filename':'diag'},
  'uhratio'      :{ 'levels' : [0.1,0.3,0.5,0.7,0.9,1.0,1.1,1.2,1.3,1.4,1.5], 'cmap':readNCLcm('perc2_9lev'), 'fname':['updraft_helicity_max03', 'updraft_helicity_max'], 'filename':'diag'},
- 'crefuh'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('cmap_rad.rgb')[0:13], 'fname': ['refl10cm_max', 'updraft_helicity_max'], 'filename':'diag' },
+ 'crefuh'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_rad.rgb')[0:13], 'fname': ['refl10cm_max', 'updraft_helicity_max'], 'filename':'diag' },
 
   # wind barb entries
   'wind10m'      :{ 'fname'  : ['u10', 'v10'], 'filename':'diag', 'skip':50 },
@@ -139,7 +142,9 @@ fieldinfo = {
   'windpv'       :{ 'fname'  : ['u_pv','v_pv'],                          'filename': 'diag', 'skip':50 },
   'shr06'        :{ 'fname'  : ['uzonal_6km','umeridional_6km','uzonal_surface','umeridional_surface'], 'filename': 'diag', 'skip':50 },
   'shr01'        :{ 'fname'  : ['uzonal_1km','umeridional_1km','uzonal_surface','umeridional_surface'], 'filename': 'diag', 'skip':50 },
-}
+  'bunkers'      :{ 'fname'  : ['U_COMP_STM_6KM', 'V_COMP_STM_6KM'], 'filename': 'upp', 'skip':40 },
+})
+
 # Enter wind barb info for list of pressure levels
 for plev in ['200', '250', '300', '500', '700', '850', '925']:
     fieldinfo['wind'+plev] = { 'fname' : ['uzonal_'+plev+'hPa', 'umeridional_'+plev+'hPa'], 'filename':'diag', 'skip':50}
