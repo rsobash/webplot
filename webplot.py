@@ -8,7 +8,7 @@ import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 from metpy.units import units
 import mpas
-from mpas import fieldinfo, mesh_config, makeEnsembleList
+from mpas import fieldinfo
 import numpy as np
 import pandas as pd
 import pdb
@@ -16,7 +16,7 @@ import pickle
 import os
 import scipy.ndimage as ndimage
 from scipy.interpolate import griddata
-from scipy.spatial import qhull
+from scipy.spatial import Delaunay
 import subprocess
 import re
 import sys
@@ -48,7 +48,7 @@ class webPlot:
 
         self.get_mpas_mesh()
         self.loadMap()
-        self.data, self.missing_members = readEnsemble(self)
+        self.data = readEnsemble(self)
         self.plotFields()
         self.plotTitleTimes()
         self.saveFigure()
@@ -98,6 +98,7 @@ class webPlot:
 
     def get_mpas_mesh(self):
         path = self.opts["init_file"]
+        logging.debug(f"open mpas mesh file {path}")
         mpas_mesh = xarray.open_dataset(path)
         lonCell = mpas_mesh['lonCell']
         lonCell = np.degrees(lonCell) #convert radians to degrees
@@ -119,12 +120,6 @@ class webPlot:
         logging.info(initstr+"\n"+validstr)
         self.ax.text(1, 1, initstr+"\n"+validstr, fontdict=fontdict, horizontalalignment='right', 
                 verticalalignment=verticalalignment, transform=self.ax.transAxes)
-
-        # Plot missing members 
-        if len(self.missing_members):
-            missing_members = sorted(set([ (x%self.ENS_SIZE)+1 for x in self.missing_members ])) #get member number from missing indices
-            missing_members_string = ', '.join(str(x) for x in missing_members)
-            self.ax.text(x1-5, y0+5, 'Missing member #s: %s'%missing_members_string, horizontalalignment='right')
 
     def plotFields(self):
         if 'fill' in self.data:
@@ -385,14 +380,15 @@ def parseargs():
     parser.add_argument('-con', '--convert', default=True, action='store_false', help='run final image through imagemagick')
     parser.add_argument('-d', '--debug', action='store_true', help='turn on debugging')
     parser.add_argument('--domain', type=str, choices=domains.keys(), default="CONUS", help='domain of plot')
+    parser.add_argument('--ENS_SIZE', type=int, default=1, help='number of members in ensemble')
     parser.add_argument('-f', '--fill', help='fill field (FIELD_PRODUCT_THRESH), FIELD options:'
             f"{','.join(list(fieldinfo.keys()))} PRODUCT may be one of [max,maxstamp,min,mean,meanstamp,"
             "prob,neprob,problt,neproblt,paintball,stamp,spaghetti]")
     parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
     parser.add_argument('--idir', type=str, default='/glade/campaign/mmm/parc/schwartz/MPAS_ensemble_paper',
             help="path to model output")
-    parser.add_argument('--meshstr', type=str, default='15km_mesh', 
-            help=f'mesh id {list(mesh_config.keys())} or path to file with lat/lon/area of mesh')
+    parser.add_argument('--init_file', help='path to file with lat/lon/area of mesh')
+    parser.add_argument('--meshstr', type=str, help=f'mesh id. used to prefix output file and pickle file')
     parser.add_argument('--nbarbs', type=int, default=32, help='max barbs in one dimension')
     parser.add_argument('--nlon_max', type=int, default=1500, help='max pts in longitude dimension')
     parser.add_argument('--nlat_max', type=int, default=1500, help='max pts in latitude dimension')
@@ -403,16 +399,7 @@ def parseargs():
     if opts["debug"]:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Based on meshstr, define ENS_SIZE, and init_file
-    meshstr = opts["meshstr"]
-    if meshstr in mesh_config:
-        opts["ENS_SIZE"], opts["init_file"] = mesh_config[meshstr]
-    else:
-        assert os.path.exists(meshstr), (f"--meshstr must be a recognized mesh id {mesh_config.keys()} " 
-                "or path to file (with lat/lon). not '{meshstr}'")
-        opts["init_file"] = meshstr
-        opts["ENS_SIZE"] = 1
-        meshstr = os.path.basename(os.path.dirname(meshstr))
+    assert os.path.exists(opts["init_file"]), "--init_file must be path to file with latCell, lonCell, etc."
 
     # now, convert slash-delimited fill, contour, and barb args into dicts
     for f in ['contour','barb','fill']:
@@ -462,7 +449,30 @@ def parseargs():
         opts[f] = thisdict
     return opts
 
-     
+
+def makeEnsembleList(Plot):
+    """
+    Return list of input files
+    """
+    idir = Plot.idir
+    initdate = Plot.initdate
+    fhr = Plot.fhr
+    ENS_SIZE = Plot.ENS_SIZE
+    file_list = []
+    yyyymmddhh = initdate.strftime('%Y%m%d%H')
+    for hr in fhr:
+        validstr = (initdate + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
+        if ENS_SIZE > 1:
+            file_list.extend([os.path.join(idir, f"{yyyymmddhh}/ens_{mem}/diag.{validstr}.nc") for mem in range(1,ENS_SIZE+1)])
+        else:
+            file_list.append( os.path.join(idir, f"{yyyymmddhh}/diag.{validstr}.nc") )
+    logging.debug(f"file_list {file_list}")
+    assert len(file_list), 'Empty file_list'
+    for f in file_list:
+        assert os.path.exists(f), f'{f} does not exist'
+    return file_list 
+
+
 def readEnsemble(Plot):
     initdate = Plot.initdate
     fhr = Plot.fhr
@@ -472,18 +482,8 @@ def readEnsemble(Plot):
     logging.debug(fields)
     
     datadict = {}
-    file_list = []
-    missing_list = []
-    if Plot.meshstr in ['15-3km_mesh', '15km_mesh']:
-        file_list, missing_list = makeEnsembleList(Plot) #construct list of files
-    elif Plot.meshstr == 'uni' and ENS_SIZE == 1:
-        idir = "/glade/campaign/mmm/parc/ahijevyc/MPAS"
-        file_list = [os.path.join(idir, Plot.meshstr, initdate.strftime('%Y%m%d%H'),
-            (initdate+datetime.timedelta(hours=f)).strftime('diag.%Y-%m-%d_%H.%M.%S.nc')) for f in fhr] 
-    else:
-        logging.error("no ensemble files. Exiting.")
-        logging.error("Perhaps add --mesh mpas to make_webplot.py command line")
-        sys.exit(1)
+    file_list = makeEnsembleList(Plot) #construct list of files
+    assert len(file_list), "no ensemble files. Perhaps edit makeEnsembleList()"
 
     # loop through fill field, contour field, barb field and retrieve required data
     for f in ['fill', 'contour', 'barb']:
@@ -640,7 +640,7 @@ def readEnsemble(Plot):
 
             datadict[f].append(data)
 
-    return datadict, missing_list
+    return datadict
 
 
 
@@ -846,7 +846,7 @@ def compute_rh(data):
 
 # from https://stackoverflow.com/questions/20915502/speedup-scipy-griddata-for-multiple-interpolations-between-two-irregular-grids
 def interp_weights(xyz, uvw):
-    tri = qhull.Delaunay(xyz)
+    tri = Delaunay(xyz)
     simplex = tri.find_simplex(uvw)
     vertices = np.take(tri.simplices, simplex, axis=0)
     temp = np.take(tri.transform, simplex, axis=0)
@@ -863,4 +863,3 @@ def computefrzdepth(t):
 
 if __name__ == "__main__":
     webPlot()
-
