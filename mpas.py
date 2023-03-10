@@ -1,8 +1,6 @@
 import datetime
 from fieldinfo import fieldinfo,readNCLcm
-import logging
 import numpy as np
-import os
 
 # fieldinfo should have been imported from fieldinfo module.
 # Copy fieldinfo dictionary for MPAS. Change some fnames.
@@ -55,36 +53,3 @@ fieldinfo['shr01']  =  { 'fname'  : ['uzonal_1km','umeridional_1km','uzonal_surf
 # Enter wind barb info for list of pressure levels
 for plev in ['200', '250', '300', '500', '700', '850', '925']:
     fieldinfo['wind'+plev] = { 'fname' : ['uzonal_'+plev+'hPa', 'umeridional_'+plev+'hPa'] }
-
-mesh_config = {
-        "uni" :         ( 1, '/glade/campaign/mmm/parc/ahijevyc/MPAS/uni/2018103000/init.nc'),
-        "15-3km_mesh" : (10, "/glade/p/mmm/parc/schwartz/MPAS/15-3km_mesh/init.nc"),
-        "15km_mesh" :   (10, "/glade/p/mmm/parc/schwartz/MPAS/15km_mesh/init.nc"),
-        }
-
-
-def makeEnsembleList(Plot):
-    idir = Plot.idir
-    initdate = Plot.initdate
-    fhr = Plot.fhr
-    ENS_SIZE = Plot.ENS_SIZE
-    meshstr = Plot.meshstr
-    # create lists of files (and missing file indices) for various file types
-    file_list    = []
-    missing_list = []
-    missing_index = 0
-    for hr in fhr:
-        validstr = (initdate + datetime.timedelta(hours=hr)).strftime('%Y-%m-%d_%H.%M.%S')
-        yyyymmddhh = initdate.strftime('%Y%m%d%H')
-        for mem in range(1,ENS_SIZE+1):
-            diag   = os.path.join(idir, f"{meshstr}/{yyyymmddhh}/ens_{mem}/diag.{validstr}.nc")
-            logging.debug(diag)
-            if os.path.exists(diag): file_list.append(diag)
-            else: 
-                missing_list.append(missing_index)
-                logging.warning(f"{diag} does not exist")
-            missing_index += 1
-    logging.debug(f"file_list {file_list}")
-    if not file_list:
-        logging.info('Empty file_list')
-    return file_list, missing_list
