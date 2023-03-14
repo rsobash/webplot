@@ -689,7 +689,7 @@ def saveNewMap(plot):
     ax.add_feature(cartopy.feature.STATES.with_scale('50m'), linewidth=0.05)
     ax.add_feature(cartopy.feature.LAKES.with_scale('50m'), edgecolor='k', linewidth=0.25, facecolor='k', alpha=0.05)
     if plot.domain != "CONUS":
-        logging.debug("draw counties")
+        logging.info("add county lines")
         # Create custom cartopy feature COUNTIES that can be added to the axes.
         reader = cartopy.io.shapereader.Reader('/glade/work/ahijevyc/share/shapeFiles/cb_2013_us_county_500k/cb_2013_us_county_500k.shp')
         counties = list(reader.geometries())
