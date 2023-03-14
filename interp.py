@@ -22,69 +22,80 @@ class regrid:
         logging.info(f"get mpas mesh file {path}")
         mpas_mesh = xarray.open_dataset(path)
         lonCell = mpas_mesh['lonCell']
-        lonCell = np.degrees(lonCell) #convert radians to degrees
+        lonCell = np.degrees(lonCell) #radians to degrees
         lonCell[lonCell>=180] -= 360
         mpas_mesh["lonCell"] = lonCell
-        mpas_mesh["latCell"] = np.degrees(mpas_mesh["latCell"]) #convert radians to degrees
+        mpas_mesh["latCell"] = np.degrees(mpas_mesh["latCell"]) #radians to degrees
 
-        # Source data
-        fhr = self.args.fhr[0]
         idate = pd.to_datetime(self.args.date)
-        valid_time = idate + pd.Timedelta(fhr, unit="hour")
-        ifile = os.path.join("/glade/campaign/mmm/parc/schwartz/MPAS_JEDI/15-3km_mesh/cold_start",
-                idate.strftime("%Y%m%d%H"),
-                f'diag.{valid_time.strftime("%Y-%m-%d_%H.%M.%S")}.nc' )
-        var = "refl10cm_1km_max"
-        logging.info(f"open {ifile} {var}")
-        data = xarray.open_dataset(ifile)[var]
+        idir = self.args.idir
+        outs = []
+        grbs=[]
+        # Source data
+        for fhr in self.args.fhr:
+            valid_time = idate + pd.Timedelta(fhr, unit="hour")
+            ifile = os.path.join(idir,
+                    idate.strftime("%Y%m%d%H"),
+                    f'diag.{valid_time.strftime("%Y-%m-%d_%H.%M.%S")}.nc' )
+            var = "refl10cm_1km_max"
+            logging.info(f"open {ifile} {var}")
+            data = xarray.open_dataset(ifile)[var]
 
-        # grib file with destination mesh
-        today = pd.Timestamp.now().strftime('%Y%m%d00') 
-        grb_with_dest_mesh = f'/glade/scratch/sobash/HRRR/{today}/hrrr.t00z.wrfsfcf00.grib2'
-        with pygrib.open(grb_with_dest_mesh) as f:
-            grb = f.readline()
-            dest_latlons = grb.latlons()
-        # destination lats and lons
-        dest_lats, dest_lons = dest_latlons
-        # weights and vertices for regridding 
-        pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.args.meshstr}.pk")
-        if not os.path.exists(pk_file):
-            saveNewMap(mpas_mesh, dest_latlons, pk_file)
-        logging.info(f"load {pk_file}")
-        (ibox, vtx, wts) = pickle.load(open(pk_file, 'rb'))
+            # grib file with destination mesh
+            today = pd.Timestamp.now().strftime('%Y%m%d00') 
+            grb_with_dest_mesh = f'/glade/scratch/sobash/HRRR/{today}/hrrr.t00z.wrfsfcf00.grib2'
+            with pygrib.open(grb_with_dest_mesh) as f:
+                grb = f.readline()
+                dest_latlons = grb.latlons()
+            # destination lats and lons
+            dest_lats, dest_lons = dest_latlons
+            # weights and vertices for regridding 
+            pk_file = os.path.join(os.getenv('TMPDIR'), f"{self.args.meshstr}.pk")
+            if not os.path.exists(pk_file):
+                saveNewMap(mpas_mesh, dest_latlons, pk_file)
+            logging.info(f"load {pk_file}")
+            (ibox, vtx, wts) = pickle.load(open(pk_file, 'rb'))
 
-        # drop cells far away from destination mesh (ibox=False)
-        data = data.isel(Time=0,nCells=ibox)
-        logging.info("interpolatetri(vtx and wts)")
-        out = interpolatetri(data.values, vtx, wts)
-        logging.info("reshape")
-        out = np.reshape(out, dest_lats.shape)
-        logging.info("DataArray")
-        out = xarray.DataArray(data=out, name=var, 
-                coords = dict(lat=(["y","x"], dest_lats), lon=(["y","x"], dest_lons)), 
-                dims=["y","x"], attrs=data.attrs)
-        logging.info("to_netcdf")
-        out.to_netcdf('out.nc')
+            # drop cells far away from destination mesh (ibox=False)
+            data = data.isel(Time=0,nCells=ibox)
+            logging.info("interpolatetri(vtx and wts)")
+            out = interpolatetri(data.values, vtx, wts)
+            logging.debug("reshape")
+            out = np.reshape(out, dest_lats.shape)
+            logging.debug("DataArray")
+            out = xarray.DataArray(data=out, name=var, 
+                    coords = dict(
+                        lat=(["y","x"], dest_lats), 
+                        lon=(["y","x"], dest_lons)), 
+                    dims=["y","x"], attrs=data.attrs)
+            outs.append(out)
 
-        ogrb = 'out.grb2'
+            grb.values = out.values
+            grb.dataDate = int(idate.strftime("%Y%m%d"))
+            grb.dataTime = int(idate.strftime("%H%M"))
+            grb["forecastTime"] = fhr
+            grbs.append(grb)
+
+        ocdf = f'{idate.strftime("%Y%m%d_%H")}.nc'
+        logging.info(f"to_netcdf {ocdf}")
+        xarray.concat(outs, pd.Index(self.args.fhr, name="forecast_hour")).to_netcdf(ocdf)
+
+        ogrb = f'{idate.strftime("%Y%m%d_%H")}.grb2'
         logging.info(f"write {ogrb}")
-        grb.values = out.values
-        grb.dataDate = int(idate.strftime("%Y%m%d"))
-        grb.dataTime = int(idate.strftime("%H%M"))
-        grb["forecastTime"] = fhr
         with open(ogrb, 'wb') as f:
-            f.write(grb.tostring())
+            for grb in grbs:
+                f.write(grb.tostring())
 
 def interpolatetri(values, vtx, wts):
     return np.einsum('nj,nj->n', np.take(values, vtx), wts)
 
 def parseargs():
-    '''Parse arguments and return dictionary of parameters'''
+    '''Parse arguments and argparse Namespace'''
 
     parser = argparse.ArgumentParser(description='regrid MPAS',
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('date', help='model initialization time')
-    parser.add_argument('init_file', help='path to file with latCell, lonCell of mesh')
+    parser.add_argument('init_file', help='path to init.nc file with latCell, lonCell of mesh')
     parser.add_argument('-d', '--debug', action='store_true', help='turn on debugging')
     parser.add_argument('--ENS_SIZE', type=int, default=1, help='number of members in ensemble')
     parser.add_argument('--fhr', nargs='+', type=float, default=[12], help='list of forecast hours')
