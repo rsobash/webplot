@@ -74,7 +74,7 @@ fieldinfo.update({
   'hmwind'       :{ 'levels' : [10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42], 'cmap': readNCLcm('prcp_1')[:16], 'fname': ['wind_speed_level1_max'], 'filename':'diag' },
   #'hmwind'       :{ 'levels' : [10,12,14,16,18,20,22,24,26,28,30,32,34], 'cmap': readNCLcm('prcp_1')[1:15], 'fname': ['WSPD10MAX'], 'filename':'diag' },
   #'hmwind'       :{ 'levels' : [20,25,30,35,40,45,50,55,60,65,70,75,80,85], 'cmap': readNCLcm('prcp_1')[1:16], 'fname': ['WSPD10MAX'], 'filename':'diag' },
-  'hmgrp'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1.0,1.5,2.0,2.5,3.0,4.0,5.0], 'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['grpl_max'], 'filename':'diag' },
+  'hmgrp'        :{ 'levels' : [0.01,0.1,0.25,0.5,0.75,1.0,1.5,2.0,2.5,3.0,4.0,5.0], 'cmap': readNCLcm('nice_gfdl')[3:193], 'fname': ['graupelnc'], 'filename':'diag' },
   'cref'         :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_rad.rgb')[1:14], 'fname': ['refl10cm_max'], 'filename':'diag' },
   'ref1km'       :{ 'levels' : [5,10,15,20,25,30,35,40,45,50,55,60,65,70], 'cmap': readcm('/glade/u/home/sobash/RT2015_gpx/cmap_rad.rgb')[1:14], 'fname': ['refl10cm_1km'], 'filename':'diag' },
   'srh3'         :{ 'levels' : [50,100,150,200,250,300,400,500], 'cmap': readNCLcm('perc2_9lev'), 'fname': ['srh_0_3km'], 'filename' : 'diag' },
