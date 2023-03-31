@@ -98,13 +98,13 @@ class webPlot:
 
     def get_mpas_mesh(self):
         path = self.opts["init_file"]
-        logging.debug(f"open mpas mesh file {path}")
+        logging.info(f"open mpas mesh file {path}")
         mpas_mesh = xarray.open_dataset(path)
         lonCell = mpas_mesh['lonCell']
-        lonCell = np.degrees(lonCell) #convert radians to degrees
+        lonCell = np.degrees(lonCell) #radians to degrees
+        lonCell[lonCell>=180] -= 360
         mpas_mesh["lonCell"] = lonCell
-        mpas_mesh["latCell"] = np.degrees(mpas_mesh["latCell"]) #convert radians to degrees
-        self.mpas_mesh = mpas_mesh
+        mpas_mesh["latCell"] = np.degrees(mpas_mesh["latCell"]) #radians to degrees
 
     def plotTitleTimes(self):
         fontdict = {'family':'monospace', 'size':12, 'weight':'bold'}
@@ -846,12 +846,16 @@ def compute_rh(data):
 
 # from https://stackoverflow.com/questions/20915502/speedup-scipy-griddata-for-multiple-interpolations-between-two-irregular-grids
 def interp_weights(xyz, uvw):
+    logging.info("interp_weights: Delaunay")
     tri = Delaunay(xyz)
+    logging.info("interp_weights: find_simplex")
     simplex = tri.find_simplex(uvw)
+    logging.info("interp_weights: vertices")
     vertices = np.take(tri.simplices, simplex, axis=0)
     temp = np.take(tri.transform, simplex, axis=0)
     d = xyz.shape[1]
     delta = uvw - temp[:, d]
+    logging.info("interp_weights: bary")
     bary = np.einsum('njk,nk->nj', temp[:, :d, :], delta)
     return vertices, np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
 

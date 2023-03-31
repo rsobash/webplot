@@ -10,11 +10,13 @@ from scipy.spatial import KDTree, Delaunay
 import sys
 import xarray
 
-
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 class regrid:
-    '''regrid MPAS'''
+    '''
+    Interpolate MPAS mesh to same grid as an example grib file.
+    Output netCDF and grib.
+    '''
     def __init__(self):
         self.args = parseargs()
         idate = pd.to_datetime(self.args.date)
